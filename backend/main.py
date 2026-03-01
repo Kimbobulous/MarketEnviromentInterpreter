@@ -5,9 +5,14 @@ from fastapi.middleware.cors import CORSMiddleware
 
 app = FastAPI()
 
+allow_origins = [
+    "http://localhost:3000",
+    "https://cautious-waffle-r44r6x5p4g5v2p79w-3000.app.github.dev",
+]
+
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["http://localhost:3000"],
+    allow_origins=allow_origins,
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
@@ -52,6 +57,19 @@ def _build_payload(tab: str) -> dict:
             "Other structural forces are not yet modeled in this stub.",
         ],
     }
+
+
+@app.get("/")
+def root():
+    return {
+        "service": "MEI backend",
+        "endpoints": ["/api/intraday", "/api/swing", "/health"],
+    }
+
+
+@app.get("/health")
+def health():
+    return {"ok": True}
 
 
 @app.get("/api/intraday")

@@ -67,7 +67,7 @@ Status: ✅ COMPLETE
 ---
 
 ## Milestone 2 — Frontend Initialization
-Status: ⏳ IN PROGRESS
+Status: ✅ COMPLETE
 
 Goal:
 - Initialize Next.js inside /frontend
@@ -77,10 +77,13 @@ Goal:
 Deliverable:
 Basic frontend running in Codespace.
 
+- [x] Next.js initialized in /frontend
+- [x] Frontend runs in Codespaces on port 3000
+
 ---
 
 ## Milestone 3 — API ↔ UI Integration
-Status: ⏳ Pending
+Status: ✅ COMPLETE
 
 Goal:
 - Connect frontend to backend
@@ -91,6 +94,9 @@ Goal:
 
 Deliverable:
 Intraday tab renders backend JSON.
+
+- [x] Frontend fetches intraday JSON successfully
+- [x] Next.js proxy route used to reach backend via localhost inside Codespace
 
 ---
 
@@ -196,17 +202,23 @@ Publicly accessible MEI dashboard.
 # 4. Current Status
 
 Current Milestone:
-Milestone 2 — Frontend Initialization
+Milestone 4 — Compute Utility Layer
 
 Backend:
 Fully operational skeleton.
 
 Frontend:
-Not yet initialized.
+Initialized and connected to backend intraday API via proxy.
 
 ---
 
-# 5. Engineering Principles
+# 5. Decisions / Notes
+
+- Direct browser calls to the backend forwarded URL hit a 302 to github.dev/pf-signin in Codespaces, so we used a Next.js server-side proxy.
+
+---
+
+# 6. Engineering Principles
 
 - Ship vertical slices.
 - Avoid overengineering.
@@ -217,7 +229,6 @@ Not yet initialized.
 
 ---
 
-# 6. Next Immediate Action
+# 7. Next Immediate Action
 
-Initialize Next.js inside /frontend.
-Confirm it runs on port 3000.
+Begin Milestone 4 compute utilities in backend/lib/.
