@@ -208,13 +208,18 @@ Backend:
 Fully operational skeleton.
 
 Frontend:
-Initialized and connected to backend intraday API via proxy.
+Dashboard UI scaffold complete with Intraday/Swing tabs, panel layouts, PanelCard sections, and shared sensitivity/summary rendering via proxy-backed API routes.
 
 ---
 
 # 5. Decisions / Notes
 
 - Direct browser calls to the backend forwarded URL hit a 302 to github.dev/pf-signin in Codespaces, so we used a Next.js server-side proxy.
+- Frontend now has Intraday/Swing tabs with correct layouts (2x2 intraday, 3+2 swing).
+- PanelCard now renders sections A/B/C plus a "Why this matters" toggle.
+- Conditional Sensitivity is collapsed by default and Summary is always visible.
+- Next.js proxy routes exist for both `/api/intraday` and `/api/swing`.
+- UI handles loading, error, and missing-panel states gracefully.
 
 ---
 
@@ -231,4 +236,4 @@ Initialized and connected to backend intraday API via proxy.
 
 # 7. Next Immediate Action
 
-Begin Milestone 4 compute utilities in backend/lib/.
+Implement Milestone 4 compute utilities in backend/lib/ (rolling percentile, regime classification, trend slope) with deterministic unit tests.

@@ -11,9 +11,32 @@ export function asText(item) {
     if (typeof item.text === "string") {
       return item.text;
     }
-    if (typeof item.title === "string") {
-      return item.title;
+
+    const label =
+      (typeof item.key === "string" && item.key) ||
+      (typeof item.label === "string" && item.label) ||
+      (typeof item.name === "string" && item.name) ||
+      (typeof item.title === "string" && item.title) ||
+      "";
+
+    const hasValue =
+      Object.prototype.hasOwnProperty.call(item, "value") &&
+      item.value !== undefined &&
+      item.value !== null;
+    const unit =
+      Object.prototype.hasOwnProperty.call(item, "unit") &&
+      item.unit !== undefined &&
+      item.unit !== null
+        ? String(item.unit)
+        : "";
+
+    if (label && hasValue) {
+      return `${label}: ${String(item.value)}${unit ? ` ${unit}` : ""}`;
     }
+    if (label) {
+      return label;
+    }
+
     try {
       return JSON.stringify(item);
     } catch {
