@@ -1,0 +1,39 @@
+MEI Session Playbook
+Updated: March 2, 2026
+
+Purpose
+- Keep Codex sessions deterministic, incremental, and aligned to current system truth.
+
+Rules
+1) One task per Codex run.
+   - Scope each run to a single milestone task or tightly-coupled subtask.
+   - Finish implementation + verification before starting the next task.
+
+2) No schema-breaking API changes.
+   - Additive fields are allowed.
+   - Preserve existing top-level payload contract unless explicitly approved.
+
+3) Always run tests after meaningful backend changes.
+   - Use `pytest -q`.
+   - Fix failures before moving to the next task.
+
+4) Keep deterministic language discipline.
+   - No predictive framing.
+   - Preserve neutral interpretation and guarded phrasing rules.
+
+5) Treat the API contract as source of truth for current behavior.
+   - `/api/intraday` and `/api/swing` are computed real-data payloads.
+   - Contract-first validation remains mandatory for tests and UI integration.
+
+6) Codespaces networking rule is strict.
+   - Browser calls frontend routes only.
+   - Frontend route handlers proxy to `http://127.0.0.1:8000/...`.
+   - Never call public backend forwarded URLs from browser code.
+
+7) UI dependency policy.
+   - `lightweight-charts` is approved and in use.
+   - Do not add random/new UI libraries without explicit approval.
+
+8) Additive fields must not break consumers.
+   - Panel payloads may include additive metadata such as `sparkline_times` and `window_meta`.
+   - Frontend/tests must tolerate additive keys without strict equality checks on full panel key sets.

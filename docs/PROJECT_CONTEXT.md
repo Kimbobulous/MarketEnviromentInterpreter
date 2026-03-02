@@ -23,9 +23,28 @@ Entry: main.py
 Endpoints:
 - GET /api/intraday
 - GET /api/swing
+- GET /api/market/status
+- GET /api/snapshots/latest
+- GET /api/snapshots/{snapshot_id}
+- GET /api/audit
 - GET /
 
-Stub JSON structure (current truth):
+Data + compute pipeline (current truth):
+- Real market data providers are active:
+  - Massive/Polygon (daily OHLC for SPY/VIX and swing proxy tickers)
+  - FRED (macro yield series, default DGS10)
+- SQLite-backed market cache is active (`market_cache` table).
+- Snapshot persistence is active (`snapshots` + `audit_log`).
+- Last-good fallback is active for both `/api/intraday` and `/api/swing` if a build/provider failure occurs.
+- `/api/intraday` and `/api/swing` return computed panel outputs (not stub-only payloads).
+- Summary weighting engine is active and emits structured summary lines:
+  - `Lead`
+  - `Support`
+  - `Mixed` (or signal-balance equivalent)
+  - `Scope`
+  - `Diagnostics`
+
+Payload shape:
 
 payload:
 - tab
@@ -38,13 +57,14 @@ panel:
 - id
 - title
 - raw_metrics[]
+- sparkline[] (last <= 60 points)
+- sparkline_times[] (aligned date labels for sparkline)
 - context[]
 - interpretation[]
 - why_toggle
 - status
 - last_updated
-
-Backend currently returns stub data only.
+- window_meta (additive debug metadata when present; non-breaking)
 
 ---
 
@@ -57,8 +77,8 @@ Location: /frontend
 Important:
 - Do NOT introduce TypeScript
 - Do NOT introduce Tailwind unless explicitly approved
-- Do NOT add UI libraries
-- Keep styling minimal
+- `lightweight-charts` is already approved and in use (v5) for chart rendering.
+- Do NOT add random/new UI dependencies without explicit approval.
 
 Frontend fetch rules:
 - Browser calls:
@@ -69,8 +89,10 @@ Frontend fetch rules:
 
 Current status:
 - Proxy working
-- Tabs not yet implemented
-- Dashboard layout scaffold in progress
+- Intraday and Swing tabs implemented
+- Dark quant theme implemented
+- Chart-dominant layout implemented
+- Focused chart + stats/summary UI states implemented
 
 ---
 
