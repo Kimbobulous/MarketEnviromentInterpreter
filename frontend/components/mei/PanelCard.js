@@ -1,99 +1,74 @@
-import { useState } from "react";
+import { useMemo, useState } from "react";
 import { asText, normalizeList } from "../../lib/normalize";
 
-const styles = {
-  card: {
-    border: "1px solid #d0d0d0",
-    borderRadius: "6px",
-    padding: "12px",
-    background: "#fafafa",
-    minHeight: "220px",
-  },
-  header: {
-    display: "flex",
-    justifyContent: "space-between",
-    alignItems: "flex-start",
-    gap: "8px",
-    marginBottom: "10px",
-  },
-  title: {
-    margin: 0,
-    fontSize: "16px",
-  },
-  meta: {
-    marginTop: "6px",
-    fontSize: "12px",
-    color: "#555",
-  },
-  badge: {
-    border: "1px solid #333",
-    borderRadius: "12px",
-    padding: "2px 8px",
-    fontSize: "12px",
-    whiteSpace: "nowrap",
-  },
-  badgeError: {
-    borderColor: "#b00020",
-    color: "#b00020",
-  },
-  badgePartial: {
-    borderColor: "#9a6700",
-    color: "#9a6700",
-  },
-  body: {
-    opacity: 1,
-  },
-  bodyDim: {
-    opacity: 0.7,
-  },
-  section: {
-    marginBottom: "10px",
-  },
-  sectionLabel: {
-    margin: "0 0 6px 0",
-    fontSize: "13px",
-    fontWeight: 600,
-  },
-  list: {
-    margin: 0,
-    paddingLeft: "18px",
-  },
-  listItem: {
-    marginBottom: "4px",
-    fontSize: "13px",
-  },
-  noData: {
-    margin: 0,
-    color: "#777",
-    fontSize: "13px",
-  },
-  toggleButton: {
-    border: "1px solid #333",
-    background: "#fff",
-    padding: "6px 10px",
-    cursor: "pointer",
-    fontSize: "13px",
-  },
-  whyText: {
-    margin: "8px 0 0 0",
-    fontSize: "13px",
-    color: "#222",
-  },
-};
+function prettyLabel(value) {
+  return String(value || "")
+    .replace(/_/g, " ")
+    .replace(/\s+/g, " ")
+    .trim()
+    .replace(/\b\w/g, (c) => c.toUpperCase());
+}
 
-function renderList(items) {
-  if (!Array.isArray(items) || items.length === 0) {
-    return <p style={styles.noData}>No data</p>;
+function formatMetricValue(metric) {
+  if (metric && typeof metric === "object") {
+    const raw = metric.value;
+    if (raw === null || raw === undefined || raw === "") {
+      return "N/A";
+    }
+
+    if (typeof raw === "number") {
+      const rounded = Math.abs(raw) >= 10 ? raw.toFixed(2) : raw.toFixed(4);
+      const unit = asText(metric.unit).trim();
+      return unit ? `${rounded} ${unit}` : rounded;
+    }
+
+    const text = asText(raw).trim();
+    const unit = asText(metric.unit).trim();
+    return unit && text ? `${text} ${unit}` : text || "N/A";
+  }
+
+  return asText(metric).trim() || "N/A";
+}
+
+function RawMetricRows({ rows }) {
+  if (!Array.isArray(rows) || rows.length === 0) {
+    return <p className="empty-copy">No data</p>;
   }
 
   return (
-    <ul style={styles.list}>
-      {items.map((item, index) => (
-        <li key={index} style={styles.listItem}>
-          {item}
-        </li>
-      ))}
-    </ul>
+    <div className="metric-grid" role="table" aria-label="Raw metrics">
+      {rows.map((metric, index) => {
+        const key = asText(metric?.key).trim() || `metric-${index + 1}`;
+        return (
+          <div className="metric-row" role="row" key={`${key}-${index}`}>
+            <span className="metric-key" role="cell">
+              {prettyLabel(key)}
+            </span>
+            <span className="metric-value" role="cell">
+              {formatMetricValue(metric)}
+            </span>
+          </div>
+        );
+      })}
+    </div>
+  );
+}
+
+function BulletSection({ title, items }) {
+  const list = normalizeList(items);
+  return (
+    <section className="panel-section">
+      <h4 className="panel-section-title">{title}</h4>
+      {list.length === 0 ? (
+        <p className="empty-copy">No data</p>
+      ) : (
+        <ul className="bullet-list compact">
+          {list.map((item, index) => (
+            <li key={index}>{item}</li>
+          ))}
+        </ul>
+      )}
+    </section>
   );
 }
 
@@ -106,68 +81,67 @@ export default function PanelCard({ panel, fallbackTitle }) {
   const title = titleText || fallbackText || "Panel";
   const lastUpdated = asText(safePanel.last_updated).trim();
 
-  const statusRaw = asText(safePanel.status).trim();
+  const statusRaw = asText(safePanel.status).trim() || "unknown";
   const statusKey = statusRaw.toLowerCase();
-  const statusLabel =
-    statusKey === "error" ? "error" : statusKey === "partial" ? "partial" : statusRaw;
-  const isErrorStatus = statusKey === "error";
+  const badgeClass =
+    statusKey === "ok"
+      ? "badge badge-ok"
+      : statusKey === "partial"
+        ? "badge badge-partial"
+        : "badge badge-error";
 
-  const rawMetrics = normalizeList(safePanel.raw_metrics);
+  const rawMetrics = useMemo(
+    () => (Array.isArray(safePanel.raw_metrics) ? safePanel.raw_metrics : []),
+    [safePanel.raw_metrics]
+  );
+
   const context = normalizeList(safePanel.context);
   const interpretation = normalizeList(safePanel.interpretation);
   const whyItems = normalizeList(safePanel.why_toggle);
   const hasWhy = whyItems.length > 0;
 
-  const badgeStyle = {
-    ...styles.badge,
-    ...(statusKey === "error" ? styles.badgeError : {}),
-    ...(statusKey === "partial" ? styles.badgePartial : {}),
-  };
-
   return (
-    <article style={styles.card}>
-      <header style={styles.header}>
+    <article className={`dashboard-card panel-card ${statusKey === "error" ? "is-error" : ""}`}>
+      <header className="panel-header">
         <div>
-          <h3 style={styles.title}>{title}</h3>
-          {lastUpdated && <p style={styles.meta}>Last updated: {lastUpdated}</p>}
+          <h3 className="panel-title">{title}</h3>
+          {lastUpdated && <p className="panel-meta">Last updated: {lastUpdated}</p>}
         </div>
-        {statusRaw && <span style={badgeStyle}>{statusLabel}</span>}
+        <span className={badgeClass}>{statusRaw}</span>
       </header>
 
-      <div style={{ ...styles.body, ...(isErrorStatus ? styles.bodyDim : {}) }}>
-        <section style={styles.section}>
-          <p style={styles.sectionLabel}>A) Raw Metrics</p>
-          {renderList(rawMetrics)}
-        </section>
+      <section className="panel-section">
+        <h4 className="panel-section-title">Raw Metrics</h4>
+        <RawMetricRows rows={rawMetrics} />
+      </section>
 
-        <section style={styles.section}>
-          <p style={styles.sectionLabel}>B) Context</p>
-          {renderList(context)}
-        </section>
+      <BulletSection title="Context" items={context} />
+      <BulletSection title="Interpretation" items={interpretation} />
 
-        <section style={styles.section}>
-          <p style={styles.sectionLabel}>C) Interpretation</p>
-          {renderList(interpretation)}
-        </section>
+      {hasWhy && (
+        <section className="panel-section">
+          <button
+            type="button"
+            className="ui-button"
+            aria-expanded={showWhy}
+            onClick={() => setShowWhy((prev) => !prev)}
+          >
+            Why this matters
+          </button>
 
-        {hasWhy && (
-          <section>
-            <button
-              type="button"
-              style={styles.toggleButton}
-              onClick={() => setShowWhy((prev) => !prev)}
-            >
-              Why this matters
-            </button>
-            {showWhy &&
-              (whyItems.length === 1 ? (
-                <p style={styles.whyText}>{whyItems[0]}</p>
-              ) : (
-                <div style={{ marginTop: "8px" }}>{renderList(whyItems)}</div>
-              ))}
-          </section>
-        )}
-      </div>
+          <div className={`accordion-wrap ${showWhy ? "open" : ""}`}>
+            {whyItems.length === 1 ? (
+              <p className="panel-copy">{whyItems[0]}</p>
+            ) : (
+              <ul className="bullet-list compact">
+                {whyItems.map((item, index) => (
+                  <li key={index}>{item}</li>
+                ))}
+              </ul>
+            )}
+          </div>
+        </section>
+      )}
     </article>
   );
 }

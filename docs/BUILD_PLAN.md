@@ -261,6 +261,17 @@ Milestone 9 — Summary Weighting Engine
 
 Intraday and Swing are both powered by computed proxy-driven panels with persistence and fallback behavior.
 
+UI Polish Milestone:
+Status: ✅ COMPLETE
+
+- [x] Modern global styling baseline (typography, tinted background, cards, badges, buttons)
+- [x] Segmented tabs styling (Intraday/Swing)
+- [x] Panel cards with improved hierarchy and "Why this matters" accordion
+- [x] Raw metrics rendered as key/value rows
+- [x] Responsive grids (no "Missing panel" placeholders)
+- [x] Skeleton loading + error banner + retry
+- [x] Sensitivity + Summary sections restyled
+
 Frontend:
 Dashboard UI scaffold complete with Intraday/Swing tabs, panel layouts, PanelCard sections, and shared sensitivity/summary rendering via proxy-backed API routes.
 

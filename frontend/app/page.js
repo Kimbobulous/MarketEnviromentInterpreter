@@ -6,120 +6,33 @@ import PanelCard from "../components/mei/PanelCard";
 import SensitivitySection from "../components/mei/SensitivitySection";
 import SummarySection from "../components/mei/SummarySection";
 
-const PANEL_COUNTS = {
-  intraday: 4,
-  swing: 5,
-};
+function PanelLayout({ tab, panels }) {
+  const safePanels = Array.isArray(panels) ? panels : [];
 
-const PANEL_LAYOUTS = {
-  intraday: [2, 2],
-  swing: [3, 2],
-};
-
-const styles = {
-  page: {
-    fontFamily: "Arial, sans-serif",
-    padding: "16px",
-    maxWidth: "1100px",
-    margin: "0 auto",
-  },
-  heading: {
-    margin: "0 0 12px 0",
-  },
-  statusRow: {
-    display: "flex",
-    alignItems: "center",
-    gap: "10px",
-    marginBottom: "16px",
-  },
-  error: {
-    color: "#b00020",
-    marginBottom: "12px",
-  },
-  retryButton: {
-    border: "1px solid #333",
-    background: "#fff",
-    padding: "6px 10px",
-    cursor: "pointer",
-  },
-  row: {
-    display: "grid",
-    gap: "12px",
-    marginBottom: "12px",
-  },
-  placeholder: {
-    border: "1px solid #d0d0d0",
-    borderRadius: "6px",
-    padding: "12px",
-    background: "#f6f6f6",
-    minHeight: "220px",
-    display: "flex",
-    alignItems: "center",
-    justifyContent: "center",
-  },
-  placeholderText: {
-    margin: 0,
-    fontSize: "14px",
-    color: "#666",
-  },
-};
-
-function buildPanelSlots(panels, tab) {
-  const limit = PANEL_COUNTS[tab];
-  const safePanels = Array.isArray(panels) ? panels.slice(0, limit) : [];
-  const slots = [];
-
-  for (let i = 0; i < limit; i += 1) {
-    slots.push(i < safePanels.length ? safePanels[i] : null);
-  }
-
-  return slots;
-}
-
-function MissingPanelBox() {
   return (
-    <article style={styles.placeholder}>
-      <p style={styles.placeholderText}>Missing panel</p>
-    </article>
+    <section className={`panel-grid ${tab === "swing" ? "panel-grid-swing" : "panel-grid-intraday"}`}>
+      {safePanels.map((panel, index) => (
+        <PanelCard key={panel?.id || `${tab}-panel-${index}`} panel={panel} fallbackTitle={`Panel ${index + 1}`} />
+      ))}
+    </section>
   );
 }
 
-function PanelLayout({ tab, panels }) {
-  const rows = PANEL_LAYOUTS[tab];
-  const slots = buildPanelSlots(panels, tab);
-  let cursor = 0;
-
+function LoadingSkeleton({ tab }) {
+  const count = tab === "swing" ? 4 : 3;
   return (
-    <section>
-      {rows.map((columns, rowIndex) => {
-        const rowStart = cursor;
-        const rowPanels = slots.slice(rowStart, rowStart + columns);
-        cursor += columns;
-
-        return (
-          <div
-            key={`${tab}-row-${rowIndex}`}
-            style={{ ...styles.row, gridTemplateColumns: `repeat(${columns}, 1fr)` }}
-          >
-            {rowPanels.map((panel, panelIndex) => {
-              const absoluteIndex = rowStart + panelIndex;
-              if (panel === null) {
-                return (
-                  <MissingPanelBox key={`${tab}-panel-${rowIndex}-${panelIndex}-missing`} />
-                );
-              }
-
-              return (
-                <PanelCard
-                  key={`${tab}-panel-${rowIndex}-${panelIndex}`}
-                  panel={panel}
-                  fallbackTitle={`Panel ${absoluteIndex + 1}`}
-                />
-              );
-            })}
-          </div>
-        );
-      })}
+    <section className={`panel-grid ${tab === "swing" ? "panel-grid-swing" : "panel-grid-intraday"}`}>
+      {Array.from({ length: count }).map((_, index) => (
+        <article className="dashboard-card panel-card" key={`${tab}-skeleton-${index}`}>
+          <div className="skeleton skeleton-title" />
+          <div className="skeleton skeleton-meta" />
+          <div className="skeleton skeleton-row" />
+          <div className="skeleton skeleton-row" />
+          <div className="skeleton skeleton-row short" />
+          <div className="skeleton skeleton-list" />
+          <div className="skeleton skeleton-list short" />
+        </article>
+      ))}
     </section>
   );
 }
@@ -158,23 +71,22 @@ export default function HomePage() {
   }, [activeTab]);
 
   return (
-    <main style={styles.page}>
-      <h1 style={styles.heading}>Market Environment Interpreter</h1>
+    <main className="dashboard-shell">
+      <header className="dashboard-header">
+        <h1>Market Environment Interpreter</h1>
+        <p className="subtle-source">
+          Data source: {activeTab === "intraday" ? "/api/intraday" : "/api/swing"}
+        </p>
+      </header>
+
       <MeiTabs activeTab={activeTab} onChange={setActiveTab} />
 
-      <div style={styles.statusRow}>
-        <span>Fetching: {activeTab === "intraday" ? "/api/intraday" : "/api/swing"}</span>
-      </div>
+      {loading && <LoadingSkeleton tab={activeTab} />}
 
-      {loading && <p>Loading dashboard...</p>}
       {error && (
-        <div style={styles.error}>
+        <div className="error-banner" role="alert">
           <p>{error}</p>
-          <button
-            type="button"
-            style={styles.retryButton}
-            onClick={() => fetchPayload(activeTab)}
-          >
+          <button type="button" className="ui-button" onClick={() => fetchPayload(activeTab)}>
             Retry
           </button>
         </div>
@@ -182,15 +94,13 @@ export default function HomePage() {
 
       {!loading && !error && (
         <>
-          <PanelLayout
-            tab={activeTab}
-            panels={payload && Array.isArray(payload.panels) ? payload.panels : []}
-          />
+          <PanelLayout tab={activeTab} panels={payload && Array.isArray(payload.panels) ? payload.panels : []} />
+
           {payload !== null && (
-            <>
+            <section className="below-panels">
               <SensitivitySection items={payload.conditional_sensitivity} />
               <SummarySection items={payload.summary} />
-            </>
+            </section>
           )}
         </>
       )}
