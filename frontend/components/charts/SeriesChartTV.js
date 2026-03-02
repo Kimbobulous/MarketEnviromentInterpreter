@@ -153,6 +153,8 @@ export default function SeriesChartTV({
   trend,
   percentile,
   color = "#5aa8ff",
+  showFloatingTooltip = true,
+  onHoverChange,
 }) {
   const containerRef = useRef(null);
   const dataPoints = useMemo(() => normalizeSeriesData(data, timeLabels), [data, timeLabels]);
@@ -160,6 +162,9 @@ export default function SeriesChartTV({
 
   useEffect(() => {
     if (!containerRef.current || dataPoints.length < 1) {
+      if (typeof onHoverChange === "function") {
+        onHoverChange(null);
+      }
       return undefined;
     }
 
@@ -228,6 +233,9 @@ export default function SeriesChartTV({
     const handleCrosshairMove = (param) => {
       if (!containerRef.current || !param || !param.point || !param.time) {
         setTooltip(null);
+        if (typeof onHoverChange === "function") {
+          onHoverChange(null);
+        }
         return;
       }
 
@@ -236,6 +244,9 @@ export default function SeriesChartTV({
       const heightPx = containerRef.current.clientHeight;
       if (x < 0 || y < 0 || x > width || y > heightPx) {
         setTooltip(null);
+        if (typeof onHoverChange === "function") {
+          onHoverChange(null);
+        }
         return;
       }
 
@@ -248,6 +259,9 @@ export default function SeriesChartTV({
             : null;
       if (value === null) {
         setTooltip(null);
+        if (typeof onHoverChange === "function") {
+          onHoverChange(null);
+        }
         return;
       }
 
@@ -266,13 +280,21 @@ export default function SeriesChartTV({
       const left = Math.max(8, Math.min(width - tipWidth - 8, x + 12));
       const top = Math.max(8, Math.min(heightPx - tipHeight - 8, y - tipHeight - 10));
 
-      setTooltip({
+      const nextHover = {
         left,
         top,
         dateLabel: toDateLabel(param.time),
         valueLabel: formatValue(value),
         deltaText,
-      });
+      };
+      setTooltip(nextHover);
+      if (typeof onHoverChange === "function") {
+        onHoverChange({
+          dateLabel: nextHover.dateLabel,
+          valueLabel: nextHover.valueLabel,
+          deltaText: nextHover.deltaText,
+        });
+      }
     };
     chart.subscribeCrosshairMove(handleCrosshairMove);
 
@@ -287,10 +309,13 @@ export default function SeriesChartTV({
     return () => {
       chart.unsubscribeCrosshairMove(handleCrosshairMove);
       setTooltip(null);
+      if (typeof onHoverChange === "function") {
+        onHoverChange(null);
+      }
       observer.disconnect();
       chart.remove();
     };
-  }, [color, dataPoints, height]);
+  }, [color, dataPoints, height, onHoverChange]);
 
   if (dataPoints.length < 1) {
     return <div className="chart-empty chart-large-empty">No chart data</div>;
@@ -311,7 +336,7 @@ export default function SeriesChartTV({
 
       <div style={{ position: "relative" }}>
         <div ref={containerRef} className="tv-series" />
-        {tooltip && (
+        {showFloatingTooltip && tooltip && (
           <div
             style={{
               position: "absolute",

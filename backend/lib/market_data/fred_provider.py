@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from datetime import date, timedelta
 import json
+import urllib.error
 import urllib.parse
 import urllib.request
 
@@ -23,26 +24,41 @@ class FredProvider:
         end: str | None = None,
         limit: int | None = None,
     ) -> list[dict]:
-        if not self.api_key:
-            raise RuntimeError("MEI_FRED_API_KEY is required")
-
         start_date, end_date = _resolve_date_range(start=start, end=end)
         requested_limit = _resolve_limit(limit=limit, default=400)
 
-        params = urllib.parse.urlencode(
-            {
-                "series_id": series_id,
-                "api_key": self.api_key,
-                "file_type": "json",
-                "observation_start": start_date,
-                "observation_end": end_date,
-                "sort_order": "asc",
-                "limit": str(requested_limit),
-            }
-        )
+        query = {
+            "series_id": series_id,
+            "file_type": "json",
+            "observation_start": start_date,
+            "observation_end": end_date,
+            "sort_order": "asc",
+            "limit": str(requested_limit),
+        }
+        if self.api_key:
+            query["api_key"] = self.api_key
+        params = urllib.parse.urlencode(query)
         url = f"{self.BASE_URL}?{params}"
 
-        payload = _read_json(url)
+        try:
+            payload = _read_json(url)
+        except urllib.error.HTTPError as exc:
+            body = ""
+            try:
+                body = exc.read().decode("utf-8")
+            except Exception:
+                body = ""
+            if not self.api_key and exc.code in {400, 401, 403}:
+                raise RuntimeError(
+                    "FRED request rejected without API key; set MEI_FRED_API_KEY"
+                ) from exc
+            message = body.strip() or str(exc.reason or "")
+            reason = message[:240] if message else f"http_status={exc.code}"
+            raise RuntimeError(f"FRED request failed for {series_id}: {reason}") from exc
+        except urllib.error.URLError as exc:
+            raise RuntimeError(
+                f"FRED request failed for {series_id}: {exc.reason or str(exc)}"
+            ) from exc
         observations = (
             payload.get("observations", []) if isinstance(payload, dict) else []
         )

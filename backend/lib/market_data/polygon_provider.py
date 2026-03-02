@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from datetime import date, datetime, timedelta, timezone
 import json
+import urllib.error
 import urllib.parse
 import urllib.request
 
@@ -45,7 +46,14 @@ class PolygonProvider(MarketDataProvider):
             + params
         )
 
-        payload = _read_json(url)
+        try:
+            payload = _read_json(url)
+        except urllib.error.HTTPError as exc:
+            if exc.code == 403:
+                raise RuntimeError(f"Polygon access forbidden for {symbol}") from exc
+            raise RuntimeError(
+                f"Polygon request failed for {symbol} (http_status={exc.code})"
+            ) from exc
         results = payload.get("results", []) if isinstance(payload, dict) else []
         rows = []
         for item in results:

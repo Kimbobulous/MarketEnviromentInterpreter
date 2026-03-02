@@ -1,8 +1,15 @@
 import { NextResponse } from "next/server";
 
-export async function GET() {
+export async function GET(request) {
   try {
-    const upstream = await fetch("http://127.0.0.1:8000/api/swing", {
+    const incomingUrl = new URL(request.url);
+    const lookback = incomingUrl.searchParams.get("lookback");
+    const upstreamUrl = new URL("http://127.0.0.1:8000/api/swing");
+    if (lookback) {
+      upstreamUrl.searchParams.set("lookback", lookback);
+    }
+
+    const upstream = await fetch(upstreamUrl.toString(), {
       cache: "no-store",
     });
 

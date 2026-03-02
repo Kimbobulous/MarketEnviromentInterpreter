@@ -1,14 +1,22 @@
 from datetime import date, datetime, timedelta, timezone
 from contextlib import asynccontextmanager
+import json
+import logging
 import math
 import os
 
 from fastapi import FastAPI
+from fastapi import HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 
 try:
-    from lib.compute import classify_regime, rolling_percentile, trend_slope
+    from lib.compute import (
+        classify_regime,
+        rolling_percentile,
+        rolling_percentile_series,
+        trend_slope,
+    )
     from lib.db import connect, init_db
     from lib.env import load_dotenv
     from lib.interpret import (
@@ -19,19 +27,24 @@ try:
     )
     from lib.market_data.cache import get_cache_entry
     from lib.market_data.client import (
+        daily_ohlc_cache_key,
         get_daily_ohlc,
         get_spy_daily,
         get_vix_daily,
         get_yield_daily,
         spy_cache_key,
-        vix_cache_key,
         yield_cache_key,
     )
     from lib.snapshots import get_snapshot_by_id, list_audit, list_snapshots
     from lib.snapshots import get_last_good_snapshot, log_action, save_snapshot
     from lib.weighting import build_structured_summary, classify_summary, score_forces
 except ModuleNotFoundError:  # package-context fallback for tests/importers
-    from .lib.compute import classify_regime, rolling_percentile, trend_slope
+    from .lib.compute import (
+        classify_regime,
+        rolling_percentile,
+        rolling_percentile_series,
+        trend_slope,
+    )
     from .lib.db import connect, init_db
     from .lib.env import load_dotenv
     from .lib.interpret import (
@@ -42,12 +55,12 @@ except ModuleNotFoundError:  # package-context fallback for tests/importers
     )
     from .lib.market_data.cache import get_cache_entry
     from .lib.market_data.client import (
+        daily_ohlc_cache_key,
         get_daily_ohlc,
         get_spy_daily,
         get_vix_daily,
         get_yield_daily,
         spy_cache_key,
-        vix_cache_key,
         yield_cache_key,
     )
     from .lib.snapshots import get_snapshot_by_id, list_audit, list_snapshots
@@ -61,6 +74,10 @@ DEFAULT_SWING_PCTL_LOOKBACK = 252
 DEFAULT_TREND_LOOKBACK = 126
 DEFAULT_SERIES_TARGET_BARS = 252
 DEFAULT_SERIES_MIN_BARS = 120
+ALLOWED_LOOKBACKS = {20, 60, 252}
+DEFAULT_PCTL_SANITY_SAMPLE_WINDOW = 120
+SOURCE_LAST_ERRORS = {"spy": None, "vix": None, "yield": None}
+logger = logging.getLogger("mei.market")
 
 
 @asynccontextmanager
@@ -163,6 +180,97 @@ def _quant_config() -> dict[str, int]:
         "series_target_bars": series_target,
         "series_min_bars": series_min,
     }
+
+
+def _resolve_selected_lookback(lookback: int | None) -> int | None:
+    if lookback is None:
+        return None
+    if lookback in ALLOWED_LOOKBACKS:
+        return lookback
+    raise HTTPException(
+        status_code=400,
+        detail="Invalid lookback. Allowed values are: 20, 60, 252.",
+    )
+
+
+def _set_source_last_error(source_key: str, error: Exception | str | None) -> None:
+    if not isinstance(source_key, str) or source_key not in SOURCE_LAST_ERRORS:
+        return
+    if error is None:
+        SOURCE_LAST_ERRORS[source_key] = None
+        return
+    SOURCE_LAST_ERRORS[source_key] = str(error)
+
+
+def _vix_ticker_candidates() -> list[str]:
+    primary = os.getenv("MEI_VIX_TICKER", "I:VIX").strip() or "I:VIX"
+    proxy = os.getenv("MEI_VIX_PROXY_TICKER", "").strip()
+    if not proxy:
+        proxy = os.getenv("MEI_SWING_VOL_ETF", "VXX").strip() or "VXX"
+
+    out: list[str] = []
+    for ticker in [primary, proxy]:
+        if ticker and ticker not in out:
+            out.append(ticker)
+    return out
+
+
+def _is_proxy_vix_ticker(ticker: str) -> bool:
+    return not str(ticker).upper().startswith("I:")
+
+
+def _is_forbidden_error(exc: Exception) -> bool:
+    text = str(exc).lower()
+    return "forbidden" in text or "403" in text
+
+
+def _select_vix_status_symbol(conn) -> str:
+    candidates = _vix_ticker_candidates()
+    chosen = candidates[0] if candidates else "I:VIX"
+    chosen_rows = -1
+    chosen_fetched = ""
+    for ticker in candidates:
+        key = daily_ohlc_cache_key(symbol=ticker)
+        entry = get_cache_entry(conn, key)
+        if entry is None:
+            continue
+        rows = int(entry.get("rows", 0) or 0)
+        fetched_at = str(entry.get("fetched_at", "") or "")
+        if rows > chosen_rows:
+            chosen = ticker
+            chosen_rows = rows
+            chosen_fetched = fetched_at
+            continue
+        if rows == chosen_rows and fetched_at > chosen_fetched:
+            chosen = ticker
+            chosen_fetched = fetched_at
+    return chosen
+
+
+def _fetch_intraday_vix_rows(conn) -> tuple[list[dict], str]:
+    candidates = _vix_ticker_candidates()
+    if not candidates:
+        raise RuntimeError("No VIX ticker candidates configured")
+
+    primary = candidates[0]
+    try:
+        rows = get_vix_daily(conn)
+        _set_source_last_error("vix", None)
+        return rows, primary
+    except Exception as exc:
+        _set_source_last_error("vix", exc)
+        if len(candidates) < 2 or not _is_forbidden_error(exc):
+            raise
+
+        proxy = candidates[1]
+        logger.warning(
+            "Primary VIX source '%s' unavailable; using proxy '%s'.",
+            primary,
+            proxy,
+        )
+        rows = get_daily_ohlc(conn, symbol=proxy)
+        _set_source_last_error("vix", None)
+        return rows, proxy
 
 
 def panel_status(percentile, slope):
@@ -302,6 +410,7 @@ def build_panel(
     trend_lookback: int | None = None,
     series_target: int | None = None,
     series_min: int | None = None,
+    lookback_selected: int | None = None,
 ) -> dict:
     timestamp = _iso_now()
     quant = _quant_config()
@@ -355,6 +464,8 @@ def build_panel(
             "pctl_excludes_current": True,
         },
     }
+    if lookback_selected is not None:
+        panel["window_meta"]["lookback_selected"] = lookback_selected
 
     generated = generate_interpretation(tab_name, panel)
     panel["context"] = generated["context"]
@@ -416,7 +527,11 @@ def _aggregate_tab_signals(panels: list[dict]) -> dict:
     }
 
 
-def _build_payload_from_panels(tab_name: str, panels: list[dict]) -> dict:
+def _build_payload_from_panels(
+    tab_name: str,
+    panels: list[dict],
+    lookback_selected: int | None = None,
+) -> dict:
     timestamp = _iso_now()
     status_counts = {"ok": 0, "partial": 0, "error": 0}
     for p in panels:
@@ -473,16 +588,23 @@ def _build_payload_from_panels(tab_name: str, panels: list[dict]) -> dict:
         )
     )
 
-    return {
+    payload = {
         "tab": tab_name,
         "last_updated": timestamp,
         "panels": panels,
         "conditional_sensitivity": conditional_sensitivity,
         "summary": summary,
     }
+    if lookback_selected is not None:
+        payload["window_meta"] = {"lookback_selected": lookback_selected}
+    return payload
 
 
-def build_payload(tab_name: str, panel_specs: list[dict]) -> dict:
+def build_payload(
+    tab_name: str,
+    panel_specs: list[dict],
+    lookback_selected: int | None = None,
+) -> dict:
     panels = [
         build_panel(
             panel_id=spec["id"],
@@ -494,10 +616,11 @@ def build_payload(tab_name: str, panel_specs: list[dict]) -> dict:
             trend_lookback=spec.get("trend_lookback"),
             series_target=spec.get("series_target"),
             series_min=spec.get("series_min"),
+            lookback_selected=lookback_selected,
         )
         for spec in panel_specs
     ]
-    return _build_payload_from_panels(tab_name, panels)
+    return _build_payload_from_panels(tab_name, panels, lookback_selected=lookback_selected)
 
 
 # Backward-compatible wrapper for existing tests that call _build_panel directly.
@@ -517,6 +640,7 @@ def root():
             "/api/intraday",
             "/api/swing",
             "/api/market/status",
+            "/api/debug/percentile_sanity",
             "/api/snapshots/latest",
             "/api/snapshots/{snapshot_id}",
             "/api/audit",
@@ -530,12 +654,167 @@ def health():
     return {"ok": True}
 
 
+def _debug_sanity_sample_window() -> int:
+    return _env_int(
+        "MEI_DEBUG_PCTL_SANITY_WINDOW",
+        default=DEFAULT_PCTL_SANITY_SAMPLE_WINDOW,
+        minimum=1,
+    )
+
+
+def _round_or_none(value: float | None, ndigits: int = 4) -> float | None:
+    if not isinstance(value, (int, float)):
+        return None
+    return round(float(value), ndigits)
+
+
+def _exact_count(values: list[float], target: float) -> int:
+    return sum(1 for value in values if math.isclose(value, target, abs_tol=1e-12))
+
+
+def _percentile_summary(
+    series: list[float],
+    lookback: int,
+    sample_window: int,
+) -> dict:
+    percentiles = rolling_percentile_series(series, lookback=lookback)
+    tail = percentiles[-sample_window:] if len(percentiles) > sample_window else percentiles
+
+    if not tail:
+        return {
+            "lookback": lookback,
+            "sample_size_available": len(series),
+            "computed_percentiles": len(percentiles),
+            "sample_size_window": 0,
+            "sample_window": sample_window,
+            "min": None,
+            "max": None,
+            "mean": None,
+            "count_le_5": 0,
+            "count_ge_95": 0,
+            "count_eq_0": 0,
+            "count_eq_100": 0,
+        }
+
+    return {
+        "lookback": lookback,
+        "sample_size_available": len(series),
+        "computed_percentiles": len(percentiles),
+        "sample_size_window": len(tail),
+        "sample_window": sample_window,
+        "min": _round_or_none(min(tail)),
+        "max": _round_or_none(max(tail)),
+        "mean": _round_or_none(sum(tail) / float(len(tail))),
+        "count_le_5": sum(1 for value in tail if value <= 5.0),
+        "count_ge_95": sum(1 for value in tail if value >= 95.0),
+        "count_eq_0": _exact_count(tail, 0.0),
+        "count_eq_100": _exact_count(tail, 100.0),
+    }
+
+
+def _series_values_for_sanity(
+    conn,
+    loader,
+    value_key: str,
+    positive_only: bool = False,
+) -> tuple[list[float], str | None]:
+    try:
+        rows = loader(conn)
+        values, dates = _extract_numeric_series_with_dates(rows, value_key)
+        if positive_only:
+            filtered = [
+                value
+                for value, row_date in zip(values, dates)
+                if value > 0 and _is_iso_date_string(row_date)
+            ]
+            return filtered, None
+        return values, None
+    except Exception as exc:
+        return [], str(exc)
+
+
+@app.get("/api/debug/percentile_sanity")
+def get_percentile_sanity():
+    lookbacks = [126, 252]
+    sample_window = _debug_sanity_sample_window()
+    vxx_ticker = (
+        os.getenv("MEI_VIX_PROXY_TICKER", "").strip()
+        or os.getenv("MEI_SWING_VOL_ETF", "VXX").strip()
+        or "VXX"
+    )
+    dgs10_series = os.getenv("MEI_YIELD_SERIES", "DGS10")
+
+    conn = connect()
+    try:
+        init_db(conn)
+        spy_values, spy_error = _series_values_for_sanity(
+            conn, loader=lambda c: get_spy_daily(c), value_key="close"
+        )
+        vxx_values, vxx_error = _series_values_for_sanity(
+            conn,
+            loader=lambda c: get_daily_ohlc(c, symbol=vxx_ticker),
+            value_key="close",
+        )
+        dgs10_values, dgs10_error = _series_values_for_sanity(
+            conn,
+            loader=lambda c: get_yield_daily(c),
+            value_key="value",
+            positive_only=True,
+        )
+    finally:
+        conn.close()
+
+    return {
+        "percentile_excludes_current": True,
+        "lookbacks": lookbacks,
+        "sample_window": sample_window,
+        "series": {
+            "spy": {
+                "ticker": os.getenv("MEI_SPY_TICKER", "SPY"),
+                "sample_size_available": len(spy_values),
+                "last_error": spy_error,
+                "lookback_summaries": {
+                    str(lookback): _percentile_summary(spy_values, lookback, sample_window)
+                    for lookback in lookbacks
+                },
+            },
+            "vxx": {
+                "ticker": vxx_ticker,
+                "sample_size_available": len(vxx_values),
+                "last_error": vxx_error,
+                "lookback_summaries": {
+                    str(lookback): _percentile_summary(vxx_values, lookback, sample_window)
+                    for lookback in lookbacks
+                },
+            },
+            "dgs10": {
+                "ticker": dgs10_series,
+                "sample_size_available": len(dgs10_values),
+                "last_error": dgs10_error,
+                "lookback_summaries": {
+                    str(lookback): _percentile_summary(
+                        dgs10_values, lookback, sample_window
+                    )
+                    for lookback in lookbacks
+                },
+            },
+        },
+    }
+
+
 def _source_status(
     conn,
+    source_key: str,
     cache_key: str,
     provider: str,
     ticker: str,
+    label: str | None,
     max_age_seconds: int,
+    value_key: str,
+    positive_only: bool,
+    percentile_lookback: int,
+    series_min: int,
+    series_target: int,
 ) -> dict:
     now = datetime.now(timezone.utc)
     entry = get_cache_entry(conn, cache_key)
@@ -547,6 +826,14 @@ def _source_status(
             "age_seconds": None,
             "fetched_at": None,
             "rows": 0,
+            "provider_rows": 0,
+            "clean_rows": 0,
+            "rows_after_intersection": None,
+            "rows_used_for_percentile": None,
+            "min_required": series_min,
+            "target_required": series_target,
+            "last_error": SOURCE_LAST_ERRORS.get(source_key),
+            "label": label,
         }
 
     fetched_dt = entry.get("fetched_dt")
@@ -555,6 +842,12 @@ def _source_status(
         age_seconds = max(0, int((now - fetched_dt).total_seconds()))
 
     cached = age_seconds is not None and age_seconds <= max_age_seconds
+    cached_rows = _cache_rows(conn, cache_key)
+    provider_rows, clean_rows = _series_row_counts(
+        rows=cached_rows,
+        value_key=value_key,
+        positive_only=positive_only,
+    )
 
     return {
         "provider": provider,
@@ -563,40 +856,129 @@ def _source_status(
         "age_seconds": age_seconds,
         "fetched_at": entry.get("fetched_at"),
         "rows": entry.get("rows", 0),
+        "provider_rows": provider_rows,
+        "clean_rows": clean_rows,
+        "rows_after_intersection": None,
+        "rows_used_for_percentile": _rows_used_for_percentile(
+            clean_rows=clean_rows,
+            lookback=percentile_lookback,
+        ),
+        "min_required": series_min,
+        "target_required": series_target,
+        "last_error": SOURCE_LAST_ERRORS.get(source_key),
+        "label": label,
     }
+
+
+def _cache_rows(conn, cache_key: str) -> list[dict]:
+    row = conn.execute(
+        """
+        SELECT data_json
+        FROM market_cache
+        WHERE cache_key = ?
+        LIMIT 1
+        """,
+        (cache_key,),
+    ).fetchone()
+    if row is None:
+        return []
+
+    payload = row["data_json"]
+    if not isinstance(payload, str) or not payload:
+        return []
+
+    try:
+        parsed = json.loads(payload)
+    except (TypeError, json.JSONDecodeError):
+        return []
+    if not isinstance(parsed, list):
+        return []
+
+    return [item for item in parsed if isinstance(item, dict)]
+
+
+def _series_row_counts(rows: list[dict], value_key: str, positive_only: bool) -> tuple[int, int]:
+    provider_rows = len(rows)
+    clean_rows = 0
+    for row in rows:
+        if not isinstance(row, dict):
+            continue
+        row_date = row.get("date")
+        value = row.get(value_key)
+        if not _is_iso_date_string(row_date):
+            continue
+        if not isinstance(value, (int, float)):
+            continue
+        if positive_only and value <= 0:
+            continue
+        clean_rows += 1
+    return provider_rows, clean_rows
+
+
+def _rows_used_for_percentile(clean_rows: int, lookback: int) -> int | None:
+    if clean_rows <= 0:
+        return None
+    return min(max(clean_rows - 1, 0), lookback)
 
 
 @app.get("/api/market/status")
 def get_market_status():
     max_age_seconds = _market_cache_max_age_seconds()
     spy_ticker = os.getenv("MEI_SPY_TICKER", "SPY")
-    vix_ticker = os.getenv("MEI_VIX_TICKER", "I:VIX")
     yield_series = os.getenv("MEI_YIELD_SERIES", "DGS10")
+    quant = _quant_config()
 
     conn = connect()
     try:
         init_db(conn)
+        vix_ticker = _select_vix_status_symbol(conn)
+        vix_label = (
+            f"VIX proxy ({vix_ticker})"
+            if _is_proxy_vix_ticker(vix_ticker)
+            else "VIX index"
+        )
         sources = {
             "spy": _source_status(
                 conn,
+                source_key="spy",
                 cache_key=spy_cache_key(),
                 provider="polygon",
                 ticker=spy_ticker,
+                label="SPY",
                 max_age_seconds=max_age_seconds,
+                value_key="close",
+                positive_only=False,
+                percentile_lookback=quant["intraday_pctl_lookback"],
+                series_min=quant["series_min_bars"],
+                series_target=quant["series_target_bars"],
             ),
             "vix": _source_status(
                 conn,
-                cache_key=vix_cache_key(),
+                source_key="vix",
+                cache_key=daily_ohlc_cache_key(symbol=vix_ticker),
                 provider="polygon",
                 ticker=vix_ticker,
+                label=vix_label,
                 max_age_seconds=max_age_seconds,
+                value_key="close",
+                positive_only=False,
+                percentile_lookback=quant["intraday_pctl_lookback"],
+                series_min=quant["series_min_bars"],
+                series_target=quant["series_target_bars"],
             ),
             "yield": _source_status(
                 conn,
+                source_key="yield",
                 cache_key=yield_cache_key(),
                 provider="fred",
                 ticker=yield_series,
+                label="10Y yield (FRED)",
                 max_age_seconds=max_age_seconds,
+                value_key="value",
+                positive_only=True,
+                percentile_lookback=quant["intraday_pctl_lookback"],
+                series_min=quant["series_min_bars"],
+                series_target=quant["series_target_bars"],
             ),
         }
     finally:
@@ -624,10 +1006,22 @@ def _extract_numeric_series_with_dates(
     return series, dates
 
 
-def _build_intraday_panel_specs(conn) -> list[dict]:
-    spy_rows = get_spy_daily(conn)
-    vix_rows = get_vix_daily(conn)
-    yield_rows = get_yield_daily(conn)
+def _build_intraday_panel_specs(conn, lookback_selected: int | None = None) -> list[dict]:
+    try:
+        spy_rows = get_spy_daily(conn)
+        _set_source_last_error("spy", None)
+    except Exception as exc:
+        _set_source_last_error("spy", exc)
+        raise
+
+    vix_rows, used_vix_ticker = _fetch_intraday_vix_rows(conn)
+
+    try:
+        yield_rows = get_yield_daily(conn)
+        _set_source_last_error("yield", None)
+    except Exception as exc:
+        _set_source_last_error("yield", exc)
+        raise
 
     spy_close, spy_dates = _extract_numeric_series_with_dates(spy_rows, "close")
     vix_close, vix_dates = _extract_numeric_series_with_dates(vix_rows, "close")
@@ -641,10 +1035,17 @@ def _build_intraday_panel_specs(conn) -> list[dict]:
     yield_dates = [row_date for _value, row_date in yield_pairs]
 
     quant = _quant_config()
-    intraday_pctl_lookback = quant["intraday_pctl_lookback"]
-    trend_lookback = quant["trend_lookback"]
+    intraday_pctl_lookback = (
+        lookback_selected if lookback_selected is not None else quant["intraday_pctl_lookback"]
+    )
+    trend_lookback = lookback_selected if lookback_selected is not None else quant["trend_lookback"]
     series_min = quant["series_min_bars"]
     series_target = quant["series_target_bars"]
+    vix_title = (
+        f"Intraday Volatility Proxy State ({used_vix_ticker})"
+        if _is_proxy_vix_ticker(used_vix_ticker)
+        else "Intraday VIX State"
+    )
 
     return [
         {
@@ -656,16 +1057,18 @@ def _build_intraday_panel_specs(conn) -> list[dict]:
             "trend_lookback": trend_lookback,
             "series_target": series_target,
             "series_min": series_min,
+            "lookback_selected": lookback_selected,
         },
         {
             "id": "intraday_vix_state",
-            "title": "Intraday VIX State",
+            "title": vix_title,
             "series": vix_close,
             "series_dates": vix_dates,
             "lookback": intraday_pctl_lookback,
             "trend_lookback": trend_lookback,
             "series_target": series_target,
             "series_min": series_min,
+            "lookback_selected": lookback_selected,
         },
         {
             "id": "intraday_yield_state",
@@ -676,6 +1079,7 @@ def _build_intraday_panel_specs(conn) -> list[dict]:
             "trend_lookback": trend_lookback,
             "series_target": series_target,
             "series_min": series_min,
+            "lookback_selected": lookback_selected,
         },
     ]
 
@@ -728,6 +1132,7 @@ def _build_swing_proxy_panel(
     series_target: int,
     series_min: int,
     data_note: str | None = None,
+    lookback_selected: int | None = None,
 ) -> dict:
     timestamp = _iso_now()
     status = "ok"
@@ -806,6 +1211,8 @@ def _build_swing_proxy_panel(
             "pctl_excludes_current": True,
         },
     }
+    if lookback_selected is not None:
+        panel["window_meta"]["lookback_selected"] = lookback_selected
 
     generated = generate_interpretation("swing", panel)
     panel["context"] = generated["context"]
@@ -818,7 +1225,7 @@ def _build_swing_proxy_panel(
     return panel
 
 
-def _build_swing_panels(conn) -> list[dict]:
+def _build_swing_panels(conn, lookback_selected: int | None = None) -> list[dict]:
     breadth_a = os.getenv("MEI_SWING_BREADTH_A", "RSP")
     breadth_b = os.getenv("MEI_SWING_BREADTH_B", "SPY")
     conc_a = os.getenv("MEI_SWING_CONC_A", "QQQ")
@@ -828,8 +1235,10 @@ def _build_swing_panels(conn) -> list[dict]:
     swing_vix = os.getenv("MEI_SWING_VIX_TICKER", "I:VIX")
     swing_vol_etf = os.getenv("MEI_SWING_VOL_ETF", "VXX")
     quant = _quant_config()
-    trend_lookback = quant["trend_lookback"]
-    pctl_lookback = quant["swing_pctl_lookback"]
+    trend_lookback = lookback_selected if lookback_selected is not None else quant["trend_lookback"]
+    pctl_lookback = (
+        lookback_selected if lookback_selected is not None else quant["swing_pctl_lookback"]
+    )
     series_target = quant["series_target_bars"]
     series_min = quant["series_min_bars"]
 
@@ -863,6 +1272,7 @@ def _build_swing_panels(conn) -> list[dict]:
             series_target=series_target,
             series_min=series_min,
             data_note=breadth_note,
+            lookback_selected=lookback_selected,
         ),
         _build_swing_proxy_panel(
             panel_id="swing_concentration_tilt",
@@ -875,6 +1285,7 @@ def _build_swing_panels(conn) -> list[dict]:
             series_target=series_target,
             series_min=series_min,
             data_note=conc_note,
+            lookback_selected=lookback_selected,
         ),
         _build_swing_proxy_panel(
             panel_id="swing_risk_sentiment",
@@ -887,6 +1298,7 @@ def _build_swing_panels(conn) -> list[dict]:
             series_target=series_target,
             series_min=series_min,
             data_note=sent_note,
+            lookback_selected=lookback_selected,
         ),
         _build_swing_proxy_panel(
             panel_id="swing_vol_term_structure",
@@ -899,24 +1311,35 @@ def _build_swing_panels(conn) -> list[dict]:
             series_target=series_target,
             series_min=series_min,
             data_note=vol_combined_note,
+            lookback_selected=lookback_selected,
         ),
     ]
     return panels
 
 
-def _build_swing_payload(conn) -> dict:
-    panels = _build_swing_panels(conn)
-    return _build_payload_from_panels("swing", panels)
+def _build_swing_payload(conn, lookback_selected: int | None = None) -> dict:
+    panels = _build_swing_panels(conn, lookback_selected=lookback_selected)
+    return _build_payload_from_panels("swing", panels, lookback_selected=lookback_selected)
 
 
 @app.get("/api/intraday")
-def get_intraday():
-    return _build_with_persistence(tab="intraday", panel_specs_builder=_build_intraday_panel_specs)
+def get_intraday(lookback: int | None = None):
+    lookback_selected = _resolve_selected_lookback(lookback)
+    return _build_with_persistence(
+        tab="intraday",
+        panel_specs_builder=_build_intraday_panel_specs,
+        lookback_selected=lookback_selected,
+    )
 
 
 @app.get("/api/swing")
-def get_swing():
-    return _build_with_persistence(tab="swing", payload_builder=_build_swing_payload)
+def get_swing(lookback: int | None = None):
+    lookback_selected = _resolve_selected_lookback(lookback)
+    return _build_with_persistence(
+        tab="swing",
+        payload_builder=_build_swing_payload,
+        lookback_selected=lookback_selected,
+    )
 
 
 def _build_with_persistence(
@@ -924,6 +1347,7 @@ def _build_with_persistence(
     panel_specs: list[dict] | None = None,
     panel_specs_builder=None,
     payload_builder=None,
+    lookback_selected: int | None = None,
 ) -> dict:
     forced_fail_tab = os.getenv("MEI_FORCE_FAIL_TAB", "").strip().lower()
     try:
@@ -934,12 +1358,18 @@ def _build_with_persistence(
         try:
             init_db(conn)
             if payload_builder is not None:
-                payload = payload_builder(conn)
+                try:
+                    payload = payload_builder(conn, lookback_selected=lookback_selected)
+                except TypeError:
+                    payload = payload_builder(conn)
             else:
                 specs = panel_specs if panel_specs is not None else []
                 if panel_specs_builder is not None:
-                    specs = panel_specs_builder(conn)
-                payload = build_payload(tab, specs)
+                    try:
+                        specs = panel_specs_builder(conn, lookback_selected=lookback_selected)
+                    except TypeError:
+                        specs = panel_specs_builder(conn)
+                payload = build_payload(tab, specs, lookback_selected=lookback_selected)
             save_snapshot(conn, tab=tab, payload=payload)
         finally:
             conn.close()

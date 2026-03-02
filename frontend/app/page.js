@@ -8,6 +8,8 @@ import KeyStatsTable from "../components/mei/KeyStatsTable";
 import SystemInsight from "../components/mei/SystemInsight";
 import { normalizeList } from "../lib/normalize";
 
+const LOOKBACK_OPTIONS = [20, 60, 252];
+
 function formatTimestamp(value) {
   if (!value || typeof value !== "string") {
     return "Waiting for data";
@@ -65,6 +67,7 @@ function LoadingSkeleton({ tab }) {
 
 export default function HomePage() {
   const [activeTab, setActiveTab] = useState("intraday");
+  const [selectedLookback, setSelectedLookback] = useState(60);
   const [payload, setPayload] = useState(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
@@ -77,9 +80,17 @@ export default function HomePage() {
     intraday: "summary",
     swing: "summary",
   });
+  const [hoverReadoutByTab, setHoverReadoutByTab] = useState({
+    intraday: null,
+    swing: null,
+  });
 
-  async function fetchPayload(tab) {
-    const endpoint = tab === "intraday" ? "/api/intraday" : "/api/swing";
+  async function fetchPayload(tab, lookback) {
+    const baseEndpoint = tab === "intraday" ? "/api/intraday" : "/api/swing";
+    const query = new URLSearchParams({
+      lookback: String(lookback),
+    });
+    const endpoint = `${baseEndpoint}?${query.toString()}`;
 
     try {
       setLoading(true);
@@ -101,12 +112,19 @@ export default function HomePage() {
   }
 
   useEffect(() => {
-    fetchPayload(activeTab);
-  }, [activeTab]);
+    fetchPayload(activeTab, selectedLookback);
+  }, [activeTab, selectedLookback]);
 
   useEffect(() => {
     setRailOpen(false);
   }, [activeTab]);
+
+  useEffect(() => {
+    setHoverReadoutByTab((prev) => ({
+      ...prev,
+      [activeTab]: null,
+    }));
+  }, [activeTab, focusedByTab[activeTab]]);
 
   const panels = payload && Array.isArray(payload.panels) ? payload.panels : [];
 
@@ -148,7 +166,18 @@ export default function HomePage() {
       [activeTab]: panelId,
     }));
   };
+  const handleFocusedHover = (hoverValue) => {
+    setHoverReadoutByTab((prev) => ({
+      ...prev,
+      [activeTab]: hoverValue,
+    }));
+  };
   const focusedView = focusedViewByTab[activeTab] || "summary";
+  const focusedHoverReadout = hoverReadoutByTab[activeTab];
+  const effectiveLookback =
+    typeof payload?.window_meta?.lookback_selected === "number"
+      ? payload.window_meta.lookback_selected
+      : selectedLookback;
 
   return (
     <main className="quant-app">
@@ -156,10 +185,25 @@ export default function HomePage() {
         <div>
           <p className="quant-kicker">MEI Terminal</p>
           <h1>Market Environment Interpreter</h1>
-          <p className="subtle-source">Data source: {activeTab === "intraday" ? "/api/intraday" : "/api/swing"}</p>
+          <p className="subtle-source">
+            Data source: {activeTab === "intraday" ? "/api/intraday" : "/api/swing"} · Lookback: {effectiveLookback}
+          </p>
         </div>
         <div className="quant-topbar-controls">
           <MeiTabs activeTab={activeTab} onChange={setActiveTab} />
+          <div style={{ display: "flex", gap: "0.35rem", alignItems: "center", flexWrap: "wrap" }}>
+            {LOOKBACK_OPTIONS.map((option) => (
+              <button
+                key={option}
+                type="button"
+                className={`ui-button ${selectedLookback === option ? "is-active" : ""}`}
+                onClick={() => setSelectedLookback(option)}
+                aria-pressed={selectedLookback === option}
+              >
+                {option}
+              </button>
+            ))}
+          </div>
           <p className="muted quant-updated">Updated: {formatTimestamp(payload?.last_updated)}</p>
           <button type="button" className="ui-button rail-toggle" onClick={() => setRailOpen((prev) => !prev)}>
             {railOpen ? "Hide Insight" : "Show Insight"}
@@ -174,7 +218,7 @@ export default function HomePage() {
           {error && (
             <div className="error-banner" role="alert">
               <p>{error}</p>
-              <button type="button" className="ui-button" onClick={() => fetchPayload(activeTab)}>
+              <button type="button" className="ui-button" onClick={() => fetchPayload(activeTab, selectedLookback)}>
                 Retry
               </button>
             </div>
@@ -185,8 +229,30 @@ export default function HomePage() {
               {focusedPanel && (
                 <section className="focused-chart surface">
                   <div className="focused-chart-head">
-                    <h2>{focusedPanel.title}</h2>
-                    <p className="muted">Focused chart</p>
+                    <div>
+                      <h2>{focusedPanel.title}</h2>
+                      <p className="muted">Focused chart</p>
+                    </div>
+                    {focusedHoverReadout && (
+                      <div
+                        style={{
+                          border: "1px solid #355173",
+                          borderRadius: 10,
+                          background: "rgba(9, 16, 27, 0.95)",
+                          color: "#deebfc",
+                          padding: "0.38rem 0.55rem",
+                          fontSize: "0.73rem",
+                          lineHeight: 1.35,
+                          minWidth: 170,
+                          textAlign: "right",
+                        }}
+                        aria-live="polite"
+                      >
+                        <div>{focusedHoverReadout.dateLabel}</div>
+                        <div>Value: {focusedHoverReadout.valueLabel}</div>
+                        {focusedHoverReadout.deltaText && <div>Δ: {focusedHoverReadout.deltaText}</div>}
+                      </div>
+                    )}
                   </div>
                   <SeriesChartTV
                     data={focusedPanel.sparkline}
@@ -195,6 +261,8 @@ export default function HomePage() {
                     regime={focusedRegime}
                     trend={focusedTrend}
                     percentile={focusedPercentile}
+                    showFloatingTooltip={false}
+                    onHoverChange={handleFocusedHover}
                   />
 
                   <div className="focused-subtabs">

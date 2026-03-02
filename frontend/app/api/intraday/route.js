@@ -1,8 +1,15 @@
 import { NextResponse } from "next/server";
 
-export async function GET() {
+export async function GET(request) {
   try {
-    const response = await fetch("http://127.0.0.1:8000/api/intraday", {
+    const incomingUrl = new URL(request.url);
+    const lookback = incomingUrl.searchParams.get("lookback");
+    const upstream = new URL("http://127.0.0.1:8000/api/intraday");
+    if (lookback) {
+      upstream.searchParams.set("lookback", lookback);
+    }
+
+    const response = await fetch(upstream.toString(), {
       cache: "no-store",
     });
 

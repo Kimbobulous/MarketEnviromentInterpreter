@@ -38,6 +38,25 @@ def rolling_percentile(series, lookback):
     return 100.0 * midpoint_rank / float(lookback)
 
 
+def rolling_percentile_series(series, lookback):
+    """Return rolling percentiles for each point with enough history.
+
+    Uses ``rolling_percentile`` for every eligible index and therefore
+    preserves the existing "exclude current" behavior.
+    """
+
+    if lookback <= 0:
+        raise ValueError("lookback must be a positive integer")
+
+    out = []
+    for idx in range(lookback, len(series)):
+        value = rolling_percentile(series[: idx + 1], lookback=lookback)
+        if value is None:
+            continue
+        out.append(float(value))
+    return out
+
+
 def classify_regime(p):
     """Classify a percentile value into Low, Mid, or High regime."""
 
