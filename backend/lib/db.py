@@ -5,7 +5,7 @@ from __future__ import annotations
 import os
 import sqlite3
 
-from backend.lib.market_data.cache import ensure_market_cache_table
+from .market_data.cache import ensure_market_cache_table
 
 
 DEFAULT_DB_FILENAME = "mei.db"

@@ -7,27 +7,50 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 
-from backend.lib.compute import classify_regime, rolling_percentile, trend_slope
-from backend.lib.db import connect, init_db
-from backend.lib.env import load_dotenv
-from backend.lib.interpret import (
-    detect_tensions,
-    extract_signals,
-    generate_interpretation,
-    guard_language,
-)
-from backend.lib.market_data.cache import get_cache_entry
-from backend.lib.market_data.client import (
-    get_daily_ohlc,
-    get_spy_daily,
-    get_vix_daily,
-    get_yield_daily,
-    spy_cache_key,
-    vix_cache_key,
-    yield_cache_key,
-)
-from backend.lib.snapshots import get_snapshot_by_id, list_audit, list_snapshots
-from backend.lib.snapshots import get_last_good_snapshot, log_action, save_snapshot
+try:
+    from lib.compute import classify_regime, rolling_percentile, trend_slope
+    from lib.db import connect, init_db
+    from lib.env import load_dotenv
+    from lib.interpret import (
+        detect_tensions,
+        extract_signals,
+        generate_interpretation,
+        guard_language,
+    )
+    from lib.market_data.cache import get_cache_entry
+    from lib.market_data.client import (
+        get_daily_ohlc,
+        get_spy_daily,
+        get_vix_daily,
+        get_yield_daily,
+        spy_cache_key,
+        vix_cache_key,
+        yield_cache_key,
+    )
+    from lib.snapshots import get_snapshot_by_id, list_audit, list_snapshots
+    from lib.snapshots import get_last_good_snapshot, log_action, save_snapshot
+except ModuleNotFoundError:  # package-context fallback for tests/importers
+    from .lib.compute import classify_regime, rolling_percentile, trend_slope
+    from .lib.db import connect, init_db
+    from .lib.env import load_dotenv
+    from .lib.interpret import (
+        detect_tensions,
+        extract_signals,
+        generate_interpretation,
+        guard_language,
+    )
+    from .lib.market_data.cache import get_cache_entry
+    from .lib.market_data.client import (
+        get_daily_ohlc,
+        get_spy_daily,
+        get_vix_daily,
+        get_yield_daily,
+        spy_cache_key,
+        vix_cache_key,
+        yield_cache_key,
+    )
+    from .lib.snapshots import get_snapshot_by_id, list_audit, list_snapshots
+    from .lib.snapshots import get_last_good_snapshot, log_action, save_snapshot
 
 BACKEND_DIR = os.path.dirname(__file__)
 DOTENV_PATH = os.path.join(BACKEND_DIR, ".env")

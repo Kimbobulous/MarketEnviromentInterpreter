@@ -6,9 +6,9 @@ from datetime import date, timedelta
 import os
 import sqlite3
 
-from backend.lib.market_data.cache import cache_get, cache_put
-from backend.lib.market_data.fred_provider import FredProvider
-from backend.lib.market_data.polygon_provider import PolygonProvider
+from .cache import cache_get, cache_put
+from .fred_provider import FredProvider
+from .polygon_provider import PolygonProvider
 
 
 def get_daily_ohlc(

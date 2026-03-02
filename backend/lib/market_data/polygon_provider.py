@@ -7,7 +7,7 @@ import json
 import urllib.parse
 import urllib.request
 
-from backend.lib.market_data.base import MarketDataProvider
+from .base import MarketDataProvider
 
 
 class PolygonProvider(MarketDataProvider):
