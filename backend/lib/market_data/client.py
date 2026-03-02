@@ -25,14 +25,22 @@ def get_daily_ohlc(
 
     cached = cache_get(conn, key=key, max_age_seconds=max_age_seconds)
     if cached is not None:
-        return cached
+        normalized_cached = _sort_rows_oldest_to_newest(cached)
+        if normalized_cached:
+            return normalized_cached
 
-    rows = provider.get_daily_ohlc(symbol, start=start_date, end=end_date)
-    if not rows:
+    rows = provider.get_daily_ohlc(
+        symbol,
+        start=start_date,
+        end=end_date,
+        limit=_provider_limit(default=300),
+    )
+    normalized_rows = _sort_rows_oldest_to_newest(rows)
+    if not normalized_rows:
         raise RuntimeError(f"No rows returned from provider for {symbol}")
 
-    cache_put(conn, key=key, rows=rows)
-    return rows
+    cache_put(conn, key=key, rows=normalized_rows)
+    return normalized_rows
 
 
 def get_spy_daily(
@@ -67,14 +75,22 @@ def get_yield_daily(
 
     cached = cache_get(conn, key=key, max_age_seconds=max_age_seconds)
     if cached is not None:
-        return cached
+        normalized_cached = _sort_rows_oldest_to_newest(cached)
+        if normalized_cached:
+            return normalized_cached
 
-    rows = provider.get_daily_series(series_id, start=start_date, end=end_date)
-    if not rows:
+    rows = provider.get_daily_series(
+        series_id,
+        start=start_date,
+        end=end_date,
+        limit=_provider_limit(default=400),
+    )
+    normalized_rows = _sort_rows_oldest_to_newest(rows)
+    if not normalized_rows:
         raise RuntimeError("No yield rows returned from provider")
 
-    cache_put(conn, key=key, rows=rows)
-    return rows
+    cache_put(conn, key=key, rows=normalized_rows)
+    return normalized_rows
 
 
 def spy_cache_key(start: str | None = None, end: str | None = None) -> str:
@@ -115,3 +131,25 @@ def _cache_max_age_seconds() -> int:
     except (TypeError, ValueError):
         return 3600
     return max(0, parsed)
+
+
+def _provider_limit(default: int) -> int:
+    try:
+        parsed = int(default)
+    except (TypeError, ValueError):
+        parsed = 300
+    return max(1, parsed)
+
+
+def _sort_rows_oldest_to_newest(rows: list[dict]) -> list[dict]:
+    out: list[dict] = []
+    for row in rows:
+        if not isinstance(row, dict):
+            continue
+        row_date = row.get("date")
+        if not isinstance(row_date, str) or len(row_date) != 10:
+            continue
+        out.append(row)
+
+    out.sort(key=lambda row: row.get("date", ""))
+    return out

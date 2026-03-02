@@ -31,6 +31,13 @@ def test_rolling_percentile_handles_ties_with_midpoint_rank():
     assert percentile == 50.0
 
 
+def test_rolling_percentile_tie_behavior_is_stable_with_fractional_result():
+    series = [1.0, 3.0, 4.0, 2.0, 2.0]
+    percentile = rolling_percentile(series, lookback=4)
+    # prior [1,3,4,2], current=2 => less=1, equal=1 => (1 + 0.5)/4 = 37.5
+    assert percentile == 37.5
+
+
 def test_rolling_percentile_returns_none_when_history_is_insufficient():
     assert rolling_percentile([1.0, 2.0], lookback=2) is None
 

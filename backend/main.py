@@ -56,6 +56,11 @@ except ModuleNotFoundError:  # package-context fallback for tests/importers
 
 BACKEND_DIR = os.path.dirname(__file__)
 DOTENV_PATH = os.path.join(BACKEND_DIR, ".env")
+DEFAULT_INTRADAY_PCTL_LOOKBACK = 126
+DEFAULT_SWING_PCTL_LOOKBACK = 252
+DEFAULT_TREND_LOOKBACK = 126
+DEFAULT_SERIES_TARGET_BARS = 252
+DEFAULT_SERIES_MIN_BARS = 120
 
 
 @asynccontextmanager
@@ -114,6 +119,52 @@ def _market_cache_max_age_seconds() -> int:
     return max(0, parsed)
 
 
+def _env_int(name: str, default: int, minimum: int = 1) -> int:
+    raw = os.getenv(name, str(default))
+    try:
+        parsed = int(raw)
+    except (TypeError, ValueError):
+        return default
+    return max(minimum, parsed)
+
+
+def _quant_config() -> dict[str, int]:
+    intraday_pctl_lookback = _env_int(
+        "MEI_INTRADAY_PCTL_LOOKBACK",
+        default=DEFAULT_INTRADAY_PCTL_LOOKBACK,
+        minimum=2,
+    )
+    swing_pctl_lookback = _env_int(
+        "MEI_SWING_PCTL_LOOKBACK",
+        default=DEFAULT_SWING_PCTL_LOOKBACK,
+        minimum=2,
+    )
+    legacy_swing_lookback = _env_int(
+        "MEI_SWING_LOOKBACK",
+        default=DEFAULT_TREND_LOOKBACK,
+        minimum=2,
+    )
+    trend_lookback = _env_int(
+        "MEI_TREND_LOOKBACK",
+        default=legacy_swing_lookback,
+        minimum=2,
+    )
+    series_min = _env_int("MEI_SERIES_MIN_BARS", default=DEFAULT_SERIES_MIN_BARS, minimum=1)
+    series_target = _env_int(
+        "MEI_SERIES_TARGET_BARS",
+        default=DEFAULT_SERIES_TARGET_BARS,
+        minimum=series_min,
+    )
+
+    return {
+        "intraday_pctl_lookback": intraday_pctl_lookback,
+        "swing_pctl_lookback": swing_pctl_lookback,
+        "trend_lookback": trend_lookback,
+        "series_target_bars": series_target,
+        "series_min_bars": series_min,
+    }
+
+
 def panel_status(percentile, slope):
     if percentile is None or slope is None:
         return "partial"
@@ -145,13 +196,31 @@ def _fallback_business_day_times(count: int) -> list[str]:
     return out
 
 
-def _compute_outputs(series: list[float], lookback: int, trend_window: int = 60) -> dict:
+def _compute_outputs(
+    series: list[float],
+    lookback: int,
+    trend_window: int,
+    series_min: int,
+) -> dict:
     percentile = None
     regime = None
     slope = None
     trend_direction = None
     had_error = False
     partial = False
+
+    min_required_points = max(series_min, lookback + 1, trend_window)
+    if len(series) < min_required_points:
+        partial = True
+
+    if partial:
+        return {
+            "percentile": None,
+            "regime": None,
+            "slope": None,
+            "trend_direction": None,
+            "status": "partial",
+        }
 
     try:
         percentile_raw = rolling_percentile(series, lookback=lookback)
@@ -170,7 +239,7 @@ def _compute_outputs(series: list[float], lookback: int, trend_window: int = 60)
         had_error = True
 
     try:
-        trend_series = series[-trend_window:] if len(series) > trend_window else series
+        trend_series = series[-trend_window:]
         slope = round(trend_slope(trend_series), 4)
         trend_direction = "Up" if slope > 0 else "Down" if slope < 0 else "Flat"
     except ValueError:
@@ -230,9 +299,21 @@ def build_panel(
     lookback: int,
     tab_name: str,
     series_dates: list[str] | None = None,
+    trend_lookback: int | None = None,
+    series_target: int | None = None,
+    series_min: int | None = None,
 ) -> dict:
     timestamp = _iso_now()
-    computed = _compute_outputs(series, lookback)
+    quant = _quant_config()
+    resolved_trend_lookback = trend_lookback or quant["trend_lookback"]
+    resolved_series_min = series_min or quant["series_min_bars"]
+    resolved_series_target = series_target or quant["series_target_bars"]
+    computed = _compute_outputs(
+        series,
+        lookback=lookback,
+        trend_window=resolved_trend_lookback,
+        series_min=resolved_series_min,
+    )
 
     percentile = computed["percentile"]
     regime = computed["regime"]
@@ -265,6 +346,14 @@ def build_panel(
         "why_toggle": "",
         "status": status,
         "last_updated": timestamp,
+        "window_meta": {
+            "series_points": len(series),
+            "series_target": resolved_series_target,
+            "series_min": resolved_series_min,
+            "pctl_lookback": lookback,
+            "trend_lookback": resolved_trend_lookback,
+            "pctl_excludes_current": True,
+        },
     }
 
     generated = generate_interpretation(tab_name, panel)
@@ -402,6 +491,9 @@ def build_payload(tab_name: str, panel_specs: list[dict]) -> dict:
             lookback=spec["lookback"],
             tab_name=tab_name,
             series_dates=spec.get("series_dates"),
+            trend_lookback=spec.get("trend_lookback"),
+            series_target=spec.get("series_target"),
+            series_min=spec.get("series_min"),
         )
         for spec in panel_specs
     ]
@@ -548,7 +640,11 @@ def _build_intraday_panel_specs(conn) -> list[dict]:
     yield_value = [value for value, _row_date in yield_pairs]
     yield_dates = [row_date for _value, row_date in yield_pairs]
 
-    intraday_pctl_lookback = _env_int("MEI_INTRADAY_PCTL_LOOKBACK", default=126, minimum=2)
+    quant = _quant_config()
+    intraday_pctl_lookback = quant["intraday_pctl_lookback"]
+    trend_lookback = quant["trend_lookback"]
+    series_min = quant["series_min_bars"]
+    series_target = quant["series_target_bars"]
 
     return [
         {
@@ -557,6 +653,9 @@ def _build_intraday_panel_specs(conn) -> list[dict]:
             "series": spy_close,
             "series_dates": spy_dates,
             "lookback": intraday_pctl_lookback,
+            "trend_lookback": trend_lookback,
+            "series_target": series_target,
+            "series_min": series_min,
         },
         {
             "id": "intraday_vix_state",
@@ -564,6 +663,9 @@ def _build_intraday_panel_specs(conn) -> list[dict]:
             "series": vix_close,
             "series_dates": vix_dates,
             "lookback": intraday_pctl_lookback,
+            "trend_lookback": trend_lookback,
+            "series_target": series_target,
+            "series_min": series_min,
         },
         {
             "id": "intraday_yield_state",
@@ -571,17 +673,11 @@ def _build_intraday_panel_specs(conn) -> list[dict]:
             "series": yield_value,
             "series_dates": yield_dates,
             "lookback": intraday_pctl_lookback,
+            "trend_lookback": trend_lookback,
+            "series_target": series_target,
+            "series_min": series_min,
         },
     ]
-
-
-def _env_int(name: str, default: int, minimum: int = 1) -> int:
-    raw = os.getenv(name, str(default))
-    try:
-        parsed = int(raw)
-    except (TypeError, ValueError):
-        return default
-    return max(minimum, parsed)
 
 
 def _rows_to_close_map(rows: list[dict]) -> dict[str, float]:
@@ -629,6 +725,8 @@ def _build_swing_proxy_panel(
     series_dates: list[str] | None,
     trend_lookback: int,
     pctl_lookback: int,
+    series_target: int,
+    series_min: int,
     data_note: str | None = None,
 ) -> dict:
     timestamp = _iso_now()
@@ -640,7 +738,8 @@ def _build_swing_proxy_panel(
     trend_direction = None
     had_error = False
 
-    if not series:
+    min_required_points = max(series_min, pctl_lookback + 1, trend_lookback)
+    if len(series) < min_required_points:
         status = "partial"
     else:
         try:
@@ -657,7 +756,7 @@ def _build_swing_proxy_panel(
             had_error = True
 
         try:
-            trend_window = series[-trend_lookback:] if len(series) > trend_lookback else series
+            trend_window = series[-trend_lookback:]
             trend_input = [math.exp(value) for value in trend_window]
             slope = round(trend_slope(trend_input), 4)
             trend_direction = "Up" if slope > 0 else "Down" if slope < 0 else "Flat"
@@ -698,6 +797,14 @@ def _build_swing_proxy_panel(
         "why_toggle": "",
         "status": status,
         "last_updated": timestamp,
+        "window_meta": {
+            "series_points": len(series),
+            "series_target": series_target,
+            "series_min": series_min,
+            "pctl_lookback": pctl_lookback,
+            "trend_lookback": trend_lookback,
+            "pctl_excludes_current": True,
+        },
     }
 
     generated = generate_interpretation("swing", panel)
@@ -720,8 +827,11 @@ def _build_swing_panels(conn) -> list[dict]:
     sent_b = os.getenv("MEI_SWING_SENT_B", "SHY")
     swing_vix = os.getenv("MEI_SWING_VIX_TICKER", "I:VIX")
     swing_vol_etf = os.getenv("MEI_SWING_VOL_ETF", "VXX")
-    trend_lookback = _env_int("MEI_SWING_LOOKBACK", default=60, minimum=2)
-    pctl_lookback = _env_int("MEI_SWING_PCTL_LOOKBACK", default=252, minimum=2)
+    quant = _quant_config()
+    trend_lookback = quant["trend_lookback"]
+    pctl_lookback = quant["swing_pctl_lookback"]
+    series_target = quant["series_target_bars"]
+    series_min = quant["series_min_bars"]
 
     breadth_a_rows, breadth_a_note = _safe_daily_rows(conn, breadth_a)
     breadth_b_rows, breadth_b_note = _safe_daily_rows(conn, breadth_b)
@@ -750,6 +860,8 @@ def _build_swing_panels(conn) -> list[dict]:
             series_dates=breadth_dates,
             trend_lookback=trend_lookback,
             pctl_lookback=pctl_lookback,
+            series_target=series_target,
+            series_min=series_min,
             data_note=breadth_note,
         ),
         _build_swing_proxy_panel(
@@ -760,6 +872,8 @@ def _build_swing_panels(conn) -> list[dict]:
             series_dates=conc_dates,
             trend_lookback=trend_lookback,
             pctl_lookback=pctl_lookback,
+            series_target=series_target,
+            series_min=series_min,
             data_note=conc_note,
         ),
         _build_swing_proxy_panel(
@@ -770,6 +884,8 @@ def _build_swing_panels(conn) -> list[dict]:
             series_dates=sent_dates,
             trend_lookback=trend_lookback,
             pctl_lookback=pctl_lookback,
+            series_target=series_target,
+            series_min=series_min,
             data_note=sent_note,
         ),
         _build_swing_proxy_panel(
@@ -780,6 +896,8 @@ def _build_swing_panels(conn) -> list[dict]:
             series_dates=vol_dates,
             trend_lookback=trend_lookback,
             pctl_lookback=pctl_lookback,
+            series_target=series_target,
+            series_min=series_min,
             data_note=vol_combined_note,
         ),
     ]

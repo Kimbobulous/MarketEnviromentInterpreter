@@ -23,17 +23,19 @@ class PolygonProvider(MarketDataProvider):
         symbol: str,
         start: str | None = None,
         end: str | None = None,
+        limit: int | None = None,
     ) -> list[dict]:
         if not self.api_key:
             raise RuntimeError("MEI_POLYGON_API_KEY is required")
 
         start_date, end_date = _resolve_date_range(start=start, end=end)
+        requested_limit = _resolve_limit(limit=limit, default=300)
         ticker = urllib.parse.quote(symbol, safe=":")
         params = urllib.parse.urlencode(
             {
                 "adjusted": "true",
                 "sort": "asc",
-                "limit": "50000",
+                "limit": str(requested_limit),
                 "apiKey": self.api_key,
             }
         )
@@ -70,6 +72,7 @@ class PolygonProvider(MarketDataProvider):
                 }
             )
 
+        rows.sort(key=lambda row: row.get("date", ""))
         return rows
 
 
@@ -80,6 +83,14 @@ def _resolve_date_range(start: str | None, end: str | None) -> tuple[str, str]:
 
     default_start = (date.today() - timedelta(days=400)).isoformat()
     return default_start, end_date
+
+
+def _resolve_limit(limit: int | None, default: int) -> int:
+    try:
+        parsed = int(limit) if limit is not None else default
+    except (TypeError, ValueError):
+        parsed = default
+    return max(1, min(parsed, 50_000))
 
 
 def _read_json(url: str) -> dict:

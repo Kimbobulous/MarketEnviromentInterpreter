@@ -26,6 +26,15 @@ PANEL_KEYS = {
     "last_updated",
 }
 
+WINDOW_META_KEYS = {
+    "series_points",
+    "series_target",
+    "series_min",
+    "pctl_lookback",
+    "trend_lookback",
+    "pctl_excludes_current",
+}
+
 COMPUTE_METRIC_KEYS = {
     "percentile_lookback",
     "regime",
@@ -41,7 +50,7 @@ def _assert_payload_contract(payload):
     assert isinstance(payload["summary"], list)
 
     for panel in payload["panels"]:
-        assert set(panel.keys()) == PANEL_KEYS
+        assert PANEL_KEYS <= set(panel.keys())
         assert panel["status"] in {"ok", "partial", "error"}
         metric_keys = {metric.get("key") for metric in panel["raw_metrics"]}
         assert COMPUTE_METRIC_KEYS <= metric_keys
@@ -53,6 +62,7 @@ def _assert_payload_contract(payload):
         assert all(isinstance(value, (int, float)) for value in panel["sparkline"])
         assert all(isinstance(value, str) for value in panel["sparkline_times"])
         assert all(re.match(r"^\d{4}-\d{2}-\d{2}$", value) for value in panel["sparkline_times"])
+        assert WINDOW_META_KEYS <= set(panel.get("window_meta", {}).keys())
 
 
 def _assert_no_banned_phrases(text: str):
