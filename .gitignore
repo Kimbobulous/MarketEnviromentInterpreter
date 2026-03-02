@@ -7,3 +7,7 @@ __pycache__/
 *.pyc
 .DS_Store
 .vscode/
+
+# secrets
+.env
+backend/.env
