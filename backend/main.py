@@ -1,17 +1,30 @@
 from datetime import datetime, timezone
+from contextlib import asynccontextmanager
+import os
 
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import JSONResponse
 
 from backend.lib.compute import classify_regime, rolling_percentile, trend_slope
+from backend.lib.db import connect, init_db
 from backend.lib.interpret import (
     detect_tensions,
     extract_signals,
     generate_interpretation,
     guard_language,
 )
+from backend.lib.snapshots import get_snapshot_by_id, list_audit, list_snapshots
+from backend.lib.snapshots import get_last_good_snapshot, log_action, save_snapshot
 
-app = FastAPI()
+
+@asynccontextmanager
+async def lifespan(_app: FastAPI):
+    _initialize_db()
+    yield
+
+
+app = FastAPI(lifespan=lifespan)
 
 TENSION_LABEL_ORDER = [
     "High+Down",
@@ -33,6 +46,18 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+
+def _initialize_db() -> None:
+    conn = connect()
+    try:
+        init_db(conn)
+    finally:
+        conn.close()
+
+
+# Initialize once on import and on app startup to keep table creation idempotent.
+_initialize_db()
 
 
 def _iso_now() -> str:
@@ -249,7 +274,14 @@ def _build_panel(
 def root():
     return {
         "service": "MEI backend",
-        "endpoints": ["/api/intraday", "/api/swing", "/health"],
+        "endpoints": [
+            "/api/intraday",
+            "/api/swing",
+            "/api/snapshots/latest",
+            "/api/snapshots/{snapshot_id}",
+            "/api/audit",
+            "/health",
+        ],
     }
 
 
@@ -290,7 +322,7 @@ def get_intraday():
             "lookback": 20,
         }
     ]
-    return build_payload("intraday", panel_specs)
+    return _build_with_persistence(tab="intraday", panel_specs=panel_specs)
 
 
 @app.get("/api/swing")
@@ -325,4 +357,114 @@ def get_swing():
             "lookback": 20,
         }
     ]
-    return build_payload("swing", panel_specs)
+    return _build_with_persistence(tab="swing", panel_specs=panel_specs)
+
+
+def _build_with_persistence(tab: str, panel_specs: list[dict]) -> dict:
+    forced_fail_tab = os.getenv("MEI_FORCE_FAIL_TAB", "").strip().lower()
+    try:
+        if forced_fail_tab == tab:
+            raise RuntimeError("forced failure")
+
+        payload = build_payload(tab, panel_specs)
+
+        conn = connect()
+        try:
+            init_db(conn)
+            save_snapshot(conn, tab=tab, payload=payload)
+        finally:
+            conn.close()
+
+        return payload
+    except Exception as exc:
+        conn = connect()
+        try:
+            init_db(conn)
+            log_action(conn, tab=tab, action="build_failed", detail=str(exc))
+            last_good = get_last_good_snapshot(conn, tab=tab)
+            if last_good is not None:
+                log_action(
+                    conn,
+                    tab=tab,
+                    action="served_last_good",
+                    detail=f"{tab} build failed; served last good snapshot",
+                )
+                return last_good
+        finally:
+            conn.close()
+
+        raise
+
+
+def _normalize_tab(tab: str) -> str:
+    normalized = str(tab).strip().lower()
+    if normalized not in {"intraday", "swing"}:
+        raise ValueError("tab must be 'intraday' or 'swing'")
+    return normalized
+
+
+def _clamp_limit(value: int, default: int, minimum: int, maximum: int) -> int:
+    try:
+        numeric = int(value)
+    except (TypeError, ValueError):
+        numeric = default
+    return max(minimum, min(numeric, maximum))
+
+
+@app.get("/api/snapshots/latest")
+def get_snapshots_latest(tab: str, limit: int = 10):
+    try:
+        normalized_tab = _normalize_tab(tab)
+    except ValueError as exc:
+        return JSONResponse({"error": str(exc)}, status_code=400)
+
+    bounded_limit = _clamp_limit(limit, default=10, minimum=1, maximum=50)
+
+    conn = connect()
+    try:
+        init_db(conn)
+        snapshots = list_snapshots(conn, tab=normalized_tab, limit=bounded_limit)
+    finally:
+        conn.close()
+
+    return {
+        "tab": normalized_tab,
+        "count": len(snapshots),
+        "snapshots": snapshots,
+    }
+
+
+@app.get("/api/snapshots/{snapshot_id}")
+def get_snapshot(snapshot_id: int):
+    conn = connect()
+    try:
+        init_db(conn)
+        snapshot = get_snapshot_by_id(conn, snapshot_id=snapshot_id)
+    finally:
+        conn.close()
+
+    if snapshot is None:
+        return JSONResponse({"error": "not found"}, status_code=404)
+
+    return snapshot
+
+
+@app.get("/api/audit")
+def get_audit(tab: str | None = None, limit: int = 50):
+    normalized_tab = None
+    if tab is not None:
+        try:
+            normalized_tab = _normalize_tab(tab)
+        except ValueError as exc:
+            return JSONResponse({"error": str(exc)}, status_code=400)
+
+    bounded_limit = _clamp_limit(limit, default=50, minimum=1, maximum=200)
+
+    conn = connect()
+    try:
+        init_db(conn)
+        events = list_audit(conn, tab=normalized_tab, limit=bounded_limit)
+    finally:
+        conn.close()
+
+    return {"count": len(events), "events": events}

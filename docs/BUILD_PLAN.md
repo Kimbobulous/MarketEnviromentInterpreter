@@ -147,7 +147,7 @@ Panel + tab summary generated from states.
 ---
 
 ## Milestone 6 — SQLite Persistence
-Status: ⏳ Pending
+Status: ✅ COMPLETE
 
 Goal:
 - Snapshot storage
@@ -156,6 +156,23 @@ Goal:
 
 Deliverable:
 Snapshots saved + recoverable.
+
+- [x] SQLite `snapshots` table storing full payload JSON
+- [x] Last-good fallback for `/api/intraday` and `/api/swing`
+- [x] SQLite `audit_log` table with actions:
+  - `snapshot_saved`
+  - `build_failed`
+  - `served_last_good`
+- [x] Internal read-only endpoints:
+  - `GET /api/snapshots/latest?tab=...&limit=...`
+  - `GET /api/snapshots/{snapshot_id}`
+  - `GET /api/audit?tab=...&limit=...`
+- [x] Forced failure hook for deterministic tests: `MEI_FORCE_FAIL_TAB`
+- [x] Tests added:
+  - `backend/tests/test_persistence.py`
+  - `backend/tests/test_snapshot_endpoints.py`
+  - `backend/tests/test_last_good_fallback.py`
+- [x] Test status: `pytest -q` (37 passed)
 
 ---
 
@@ -219,10 +236,10 @@ Publicly accessible MEI dashboard.
 # 4. Current Status
 
 Current Milestone:
-Milestone 6 — SQLite Persistence
+Milestone 7 — Real Data (Intraday Core)
 
 Backend:
-Compute + interpretation layers are complete with deterministic summaries and guardrail-validated text generation.
+Compute + interpretation + SQLite persistence are complete, including snapshot storage, last-good fallback, and audit logging for Intraday/Swing.
 
 Frontend:
 Dashboard UI scaffold complete with Intraday/Swing tabs, panel layouts, PanelCard sections, and shared sensitivity/summary rendering via proxy-backed API routes.
@@ -253,4 +270,4 @@ Dashboard UI scaffold complete with Intraday/Swing tabs, panel layouts, PanelCar
 
 # 7. Next Immediate Action
 
-Begin Milestone 6: implement SQLite snapshot storage with a minimal schema and write/read path for the latest tab payload.
+Begin Milestone 7: add a market data adapter to fetch SPY daily OHLC, VIX daily, and a yield proxy while keeping the existing payload schema stable.
