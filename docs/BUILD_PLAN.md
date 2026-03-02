@@ -177,7 +177,7 @@ Snapshots saved + recoverable.
 ---
 
 ## Milestone 7 — Real Data (Intraday Core)
-Status: ⏳ Pending
+Status: ✅ COMPLETE
 
 Goal:
 - SPY daily OHLC
@@ -188,6 +188,15 @@ Goal:
 
 Deliverable:
 Live data powering Intraday tab.
+
+- [x] Massive/Polygon adapter + provider interface (SPY daily, VIX index daily)
+- [x] FRED adapter for DGS10 yield series
+- [x] SQLite `market_cache` table + caching layer
+- [x] Intraday payload now powered by real daily series (SPY/VIX/DGS10) with compute metrics
+- [x] `/api/market/status` endpoint reporting cache freshness + row counts
+- [x] Interpretation updated to reference latest value + percentile/regime + trend/slope with language guardrails
+- [x] Provider failure triggers last-good snapshot fallback (tested)
+- [x] Test status: `pytest -q` (44 passed)
 
 ---
 
@@ -236,10 +245,9 @@ Publicly accessible MEI dashboard.
 # 4. Current Status
 
 Current Milestone:
-Milestone 7 — Real Data (Intraday Core)
+Milestone 8 — Swing Panel Expansion
 
-Backend:
-Compute + interpretation + SQLite persistence are complete, including snapshot storage, last-good fallback, and audit logging for Intraday/Swing.
+Intraday is real-data powered; Swing still stubbed.
 
 Frontend:
 Dashboard UI scaffold complete with Intraday/Swing tabs, panel layouts, PanelCard sections, and shared sensitivity/summary rendering via proxy-backed API routes.
@@ -270,4 +278,4 @@ Dashboard UI scaffold complete with Intraday/Swing tabs, panel layouts, PanelCar
 
 # 7. Next Immediate Action
 
-Begin Milestone 7: add a market data adapter to fetch SPY daily OHLC, VIX daily, and a yield proxy while keeping the existing payload schema stable.
+Start Milestone 8 Task 1: define Swing panel specs (breadth, concentration, sentiment, vol term structure) using placeholder adapters initially, keeping schema stable.

@@ -67,6 +67,7 @@ def extract_signals(panel: dict) -> dict:
     regime = metric_lookup(raw_metrics, "regime")
     trend_direction = metric_lookup(raw_metrics, "trend_direction")
     trend_slope = metric_lookup(raw_metrics, "trend_slope")
+    latest_value = metric_lookup(raw_metrics, "latest_value")
 
     if not isinstance(regime, str) or not regime:
         regime = "Unknown"
@@ -74,12 +75,15 @@ def extract_signals(panel: dict) -> dict:
         trend_direction = "Unknown"
     if not isinstance(trend_slope, (int, float)):
         trend_slope = None
+    if not isinstance(latest_value, (int, float)):
+        latest_value = None
 
     return {
         "regime": regime,
         "trend_direction": trend_direction,
         "trend_slope": trend_slope,
         "percentile": percentile,
+        "latest_value": latest_value,
     }
 
 
@@ -145,6 +149,7 @@ def generate_interpretation(tab_name: str, panel: dict) -> dict:
     regime = signals["regime"]
     trend_direction = signals["trend_direction"]
     trend_slope = signals["trend_slope"]
+    latest_value = signals["latest_value"]
     status = safe_panel.get("status")
     tensions = detect_tensions(signals)
 
@@ -156,6 +161,27 @@ def generate_interpretation(tab_name: str, panel: dict) -> dict:
         why_toggle = (
             "When history is short or incomplete, the panel emphasizes current state "
             "description rather than a stronger directional framing."
+        )
+    elif str(tab_name).strip().lower() == "intraday":
+        context = [
+            (
+                f"Latest observed value is {latest_value}; percentile is {percentile} "
+                f"with regime={regime}."
+            ),
+            (
+                f"Trend state is {trend_direction} with slope={trend_slope}, "
+                "based on recent history."
+            ),
+        ]
+        interpretation = [
+            (
+                f"Intraday conditions are in a {regime} regime with a "
+                f"{trend_direction} trend signal at the current reading."
+            )
+        ]
+        why_toggle = (
+            "Combining latest level, percentile regime, and trend slope helps describe "
+            "whether current intraday conditions are stable or changing."
         )
     else:
         context = [

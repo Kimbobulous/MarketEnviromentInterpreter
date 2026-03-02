@@ -8,19 +8,32 @@ from fastapi.responses import JSONResponse
 
 from backend.lib.compute import classify_regime, rolling_percentile, trend_slope
 from backend.lib.db import connect, init_db
+from backend.lib.env import load_dotenv
 from backend.lib.interpret import (
     detect_tensions,
     extract_signals,
     generate_interpretation,
     guard_language,
 )
+from backend.lib.market_data.cache import get_cache_entry
+from backend.lib.market_data.client import (
+    get_spy_daily,
+    get_vix_daily,
+    get_yield_daily,
+    spy_cache_key,
+    vix_cache_key,
+    yield_cache_key,
+)
 from backend.lib.snapshots import get_snapshot_by_id, list_audit, list_snapshots
 from backend.lib.snapshots import get_last_good_snapshot, log_action, save_snapshot
+
+BACKEND_DIR = os.path.dirname(__file__)
+DOTENV_PATH = os.path.join(BACKEND_DIR, ".env")
 
 
 @asynccontextmanager
 async def lifespan(_app: FastAPI):
-    _initialize_db()
+    _initialize_runtime()
     yield
 
 
@@ -48,7 +61,8 @@ app.add_middleware(
 )
 
 
-def _initialize_db() -> None:
+def _initialize_runtime() -> None:
+    load_dotenv(DOTENV_PATH)
     conn = connect()
     try:
         init_db(conn)
@@ -57,11 +71,20 @@ def _initialize_db() -> None:
 
 
 # Initialize once on import and on app startup to keep table creation idempotent.
-_initialize_db()
+_initialize_runtime()
 
 
 def _iso_now() -> str:
     return datetime.now(timezone.utc).isoformat()
+
+
+def _market_cache_max_age_seconds() -> int:
+    raw = os.getenv("MEI_MARKET_CACHE_MAX_AGE_SECONDS", "3600")
+    try:
+        parsed = int(raw)
+    except (TypeError, ValueError):
+        return 3600
+    return max(0, parsed)
 
 
 def panel_status(percentile, slope):
@@ -70,32 +93,41 @@ def panel_status(percentile, slope):
     return "ok"
 
 
-def _compute_outputs(series: list[float], lookback: int) -> dict:
+def _compute_outputs(series: list[float], lookback: int, trend_window: int = 60) -> dict:
     percentile = None
     regime = None
     slope = None
     trend_direction = None
     had_error = False
+    partial = False
 
     try:
         percentile = round(rolling_percentile(series, lookback=lookback), 2)
         regime = classify_regime(percentile)
     except ValueError:
+        partial = True
         percentile = None
         regime = None
     except Exception:
         had_error = True
 
     try:
-        slope = round(trend_slope(series), 4)
+        trend_series = series[-trend_window:] if len(series) > trend_window else series
+        slope = round(trend_slope(trend_series), 4)
         trend_direction = "Up" if slope > 0 else "Down" if slope < 0 else "Flat"
     except ValueError:
+        partial = True
         slope = None
         trend_direction = None
     except Exception:
         had_error = True
 
-    status = "error" if had_error else panel_status(percentile, slope)
+    status = "error" if had_error else "partial" if partial else panel_status(percentile, slope)
+    if status == "partial":
+        percentile = None
+        regime = None
+        slope = None
+        trend_direction = None
 
     return {
         "percentile": percentile,
@@ -119,6 +151,11 @@ def build_panel(
     status = computed["status"]
 
     raw_metrics = [
+        {
+            "key": "latest_value",
+            "value": round(series[-1], 4) if series and status != "partial" else None,
+            "unit": "",
+        },
         {"key": "percentile_lookback", "value": percentile, "unit": ""},
         {"key": "regime", "value": regime, "unit": ""},
         {"key": "trend_slope", "value": slope, "unit": ""},
@@ -277,6 +314,7 @@ def root():
         "endpoints": [
             "/api/intraday",
             "/api/swing",
+            "/api/market/status",
             "/api/snapshots/latest",
             "/api/snapshots/{snapshot_id}",
             "/api/audit",
@@ -290,39 +328,126 @@ def health():
     return {"ok": True}
 
 
+def _source_status(
+    conn,
+    cache_key: str,
+    provider: str,
+    ticker: str,
+    max_age_seconds: int,
+) -> dict:
+    now = datetime.now(timezone.utc)
+    entry = get_cache_entry(conn, cache_key)
+    if entry is None:
+        return {
+            "provider": provider,
+            "ticker": ticker,
+            "cached": False,
+            "age_seconds": None,
+            "fetched_at": None,
+            "rows": 0,
+        }
+
+    fetched_dt = entry.get("fetched_dt")
+    age_seconds = None
+    if isinstance(fetched_dt, datetime):
+        age_seconds = max(0, int((now - fetched_dt).total_seconds()))
+
+    cached = age_seconds is not None and age_seconds <= max_age_seconds
+
+    return {
+        "provider": provider,
+        "ticker": ticker,
+        "cached": cached,
+        "age_seconds": age_seconds,
+        "fetched_at": entry.get("fetched_at"),
+        "rows": entry.get("rows", 0),
+    }
+
+
+@app.get("/api/market/status")
+def get_market_status():
+    max_age_seconds = _market_cache_max_age_seconds()
+    spy_ticker = os.getenv("MEI_SPY_TICKER", "SPY")
+    vix_ticker = os.getenv("MEI_VIX_TICKER", "I:VIX")
+    yield_series = os.getenv("MEI_YIELD_SERIES", "DGS10")
+
+    conn = connect()
+    try:
+        init_db(conn)
+        sources = {
+            "spy": _source_status(
+                conn,
+                cache_key=spy_cache_key(),
+                provider="polygon",
+                ticker=spy_ticker,
+                max_age_seconds=max_age_seconds,
+            ),
+            "vix": _source_status(
+                conn,
+                cache_key=vix_cache_key(),
+                provider="polygon",
+                ticker=vix_ticker,
+                max_age_seconds=max_age_seconds,
+            ),
+            "yield": _source_status(
+                conn,
+                cache_key=yield_cache_key(),
+                provider="fred",
+                ticker=yield_series,
+                max_age_seconds=max_age_seconds,
+            ),
+        }
+    finally:
+        conn.close()
+
+    return {"sources": sources}
+
+
+def _extract_numeric_series(rows: list[dict], value_key: str) -> list[float]:
+    series: list[float] = []
+    for row in rows:
+        if not isinstance(row, dict):
+            continue
+        value = row.get(value_key)
+        if isinstance(value, (int, float)):
+            series.append(float(value))
+    return series
+
+
+def _build_intraday_panel_specs(conn) -> list[dict]:
+    spy_rows = get_spy_daily(conn)
+    vix_rows = get_vix_daily(conn)
+    yield_rows = get_yield_daily(conn)
+
+    spy_close = _extract_numeric_series(spy_rows, "close")
+    vix_close = _extract_numeric_series(vix_rows, "close")
+    yield_value = [value for value in _extract_numeric_series(yield_rows, "value") if value > 0]
+
+    return [
+        {
+            "id": "intraday_spy_state",
+            "title": "Intraday SPY State",
+            "series": spy_close,
+            "lookback": 20,
+        },
+        {
+            "id": "intraday_vix_state",
+            "title": "Intraday VIX State",
+            "series": vix_close,
+            "lookback": 20,
+        },
+        {
+            "id": "intraday_yield_state",
+            "title": "Intraday 10Y Yield State",
+            "series": yield_value,
+            "lookback": 20,
+        },
+    ]
+
+
 @app.get("/api/intraday")
 def get_intraday():
-    panel_specs = [
-        {
-            "id": "intraday_vol_state",
-            "title": "Intraday Volatility State",
-            "series": [
-                1.00,
-                1.02,
-                1.01,
-                1.03,
-                1.04,
-                1.05,
-                1.04,
-                1.06,
-                1.07,
-                1.08,
-                1.09,
-                1.10,
-                1.11,
-                1.10,
-                1.12,
-                1.13,
-                1.14,
-                1.15,
-                1.16,
-                1.17,
-                1.20,
-            ],
-            "lookback": 20,
-        }
-    ]
-    return _build_with_persistence(tab="intraday", panel_specs=panel_specs)
+    return _build_with_persistence(tab="intraday", panel_specs_builder=_build_intraday_panel_specs)
 
 
 @app.get("/api/swing")
@@ -360,17 +485,24 @@ def get_swing():
     return _build_with_persistence(tab="swing", panel_specs=panel_specs)
 
 
-def _build_with_persistence(tab: str, panel_specs: list[dict]) -> dict:
+def _build_with_persistence(
+    tab: str,
+    panel_specs: list[dict] | None = None,
+    panel_specs_builder=None,
+) -> dict:
     forced_fail_tab = os.getenv("MEI_FORCE_FAIL_TAB", "").strip().lower()
     try:
         if forced_fail_tab == tab:
             raise RuntimeError("forced failure")
 
-        payload = build_payload(tab, panel_specs)
-
         conn = connect()
         try:
             init_db(conn)
+            specs = panel_specs if panel_specs is not None else []
+            if panel_specs_builder is not None:
+                specs = panel_specs_builder(conn)
+
+            payload = build_payload(tab, specs)
             save_snapshot(conn, tab=tab, payload=payload)
         finally:
             conn.close()

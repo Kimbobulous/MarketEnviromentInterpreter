@@ -134,3 +134,31 @@ def test_payload_tension_lines_if_present_are_guarded():
             ]
             for line in tension_lines:
                 _assert_no_banned_phrases(line)
+
+
+def test_intraday_interpretation_mentions_latest_regime_and_trend():
+    panel = {
+        "status": "ok",
+        "raw_metrics": [
+            {"key": "latest_value", "value": 472.55, "unit": ""},
+            {"key": "percentile_lookback", "value": 84.0, "unit": ""},
+            {"key": "regime", "value": "High", "unit": ""},
+            {"key": "trend_slope", "value": 0.0123, "unit": ""},
+            {"key": "trend_direction", "value": "Up", "unit": ""},
+        ],
+    }
+
+    out = generate_interpretation("intraday", panel)
+    combined = " ".join(out["context"] + out["interpretation"]).lower()
+
+    assert "latest observed value" in combined
+    assert "percentile" in combined
+    assert "regime" in combined
+    assert "trend state" in combined
+    assert "slope" in combined
+
+    for line in out["context"]:
+        _assert_no_banned_phrases(line)
+    for line in out["interpretation"]:
+        _assert_no_banned_phrases(line)
+    _assert_no_banned_phrases(out["why_toggle"])
