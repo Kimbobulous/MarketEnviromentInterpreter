@@ -2,7 +2,9 @@
 
 import { useEffect, useState } from "react";
 import MeiTabs from "../components/mei/MeiTabs";
-import ChartTile from "../components/mei/ChartTile";
+import SeriesChartTV from "../components/charts/SeriesChartTV";
+import ChartGrid from "../components/mei/ChartGrid";
+import KeyStatsTable from "../components/mei/KeyStatsTable";
 import SystemInsight from "../components/mei/SystemInsight";
 import { normalizeList } from "../lib/normalize";
 
@@ -17,15 +19,31 @@ function formatTimestamp(value) {
   return date.toLocaleString();
 }
 
-function ChartGrid({ tab, panels }) {
+function metricMap(rawMetrics) {
+  const map = {};
+  if (!Array.isArray(rawMetrics)) {
+    return map;
+  }
+  rawMetrics.forEach((metric) => {
+    if (!metric || typeof metric !== "object" || !metric.key) {
+      return;
+    }
+    map[String(metric.key)] = metric.value;
+  });
+  return map;
+}
+
+function getDefaultFocusedId(tab, panels) {
   const safePanels = Array.isArray(panels) ? panels.filter(Boolean) : [];
-  return (
-    <section className={`quant-grid ${tab === "swing" ? "quant-grid-swing" : "quant-grid-intraday"}`}>
-      {safePanels.map((panel, index) => (
-        <ChartTile key={panel?.id || `${tab}-panel-${index}`} panel={panel} index={index} tab={tab} />
-      ))}
-    </section>
-  );
+  if (safePanels.length === 0) {
+    return null;
+  }
+
+  const preferred =
+    tab === "intraday"
+      ? safePanels.find((panel) => String(panel?.id || "").includes("spy"))
+      : safePanels.find((panel) => String(panel?.id || "").includes("breadth"));
+  return (preferred && preferred.id) || safePanels[0].id || null;
 }
 
 function LoadingSkeleton({ tab }) {
@@ -51,6 +69,14 @@ export default function HomePage() {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
   const [railOpen, setRailOpen] = useState(false);
+  const [focusedByTab, setFocusedByTab] = useState({
+    intraday: null,
+    swing: null,
+  });
+  const [focusedViewByTab, setFocusedViewByTab] = useState({
+    intraday: "summary",
+    swing: "summary",
+  });
 
   async function fetchPayload(tab) {
     const endpoint = tab === "intraday" ? "/api/intraday" : "/api/swing";
@@ -82,8 +108,47 @@ export default function HomePage() {
     setRailOpen(false);
   }, [activeTab]);
 
+  const panels = payload && Array.isArray(payload.panels) ? payload.panels : [];
+
+  useEffect(() => {
+    const nextDefault = getDefaultFocusedId(activeTab, panels);
+    setFocusedByTab((prev) => {
+      const current = prev[activeTab];
+      const exists = panels.some((panel) => panel?.id === current);
+      if (exists) {
+        return prev;
+      }
+      return {
+        ...prev,
+        [activeTab]: nextDefault,
+      };
+    });
+  }, [activeTab, panels]);
+
   const summary = normalizeList(payload?.summary);
   const sensitivity = normalizeList(payload?.conditional_sensitivity);
+  const focusedPanelId = focusedByTab[activeTab];
+  const focusedPanel = panels.find((panel) => panel?.id === focusedPanelId) || panels[0] || null;
+  const focusedMetrics = metricMap(focusedPanel?.raw_metrics);
+
+  const focusedRegime =
+    typeof focusedMetrics.regime === "string" && focusedMetrics.regime ? focusedMetrics.regime : "Unknown";
+  const focusedTrend =
+    typeof focusedMetrics.trend_direction === "string" && focusedMetrics.trend_direction
+      ? focusedMetrics.trend_direction
+      : "Unknown";
+  const focusedPercentile =
+    typeof focusedMetrics.percentile_lookback === "number" && Number.isFinite(focusedMetrics.percentile_lookback)
+      ? focusedMetrics.percentile_lookback
+      : null;
+
+  const selectFocusedPanel = (panelId) => {
+    setFocusedByTab((prev) => ({
+      ...prev,
+      [activeTab]: panelId,
+    }));
+  };
+  const focusedView = focusedViewByTab[activeTab] || "summary";
 
   return (
     <main className="quant-app">
@@ -117,7 +182,66 @@ export default function HomePage() {
 
           {!loading && !error && (
             <div key={activeTab} className="tab-switch-fade">
-              <ChartGrid tab={activeTab} panels={payload && Array.isArray(payload.panels) ? payload.panels : []} />
+              {focusedPanel && (
+                <section className="focused-chart surface">
+                  <div className="focused-chart-head">
+                    <h2>{focusedPanel.title}</h2>
+                    <p className="muted">Focused chart</p>
+                  </div>
+                  <SeriesChartTV
+                    data={focusedPanel.sparkline}
+                    timeLabels={focusedPanel.sparkline_times}
+                    height={320}
+                    regime={focusedRegime}
+                    trend={focusedTrend}
+                    percentile={focusedPercentile}
+                  />
+
+                  <div className="focused-subtabs">
+                    <button
+                      type="button"
+                      className={`ui-button ${focusedView === "summary" ? "is-active" : ""}`}
+                      onClick={() =>
+                        setFocusedViewByTab((prev) => ({
+                          ...prev,
+                          [activeTab]: "summary",
+                        }))
+                      }
+                    >
+                      Summary
+                    </button>
+                    <button type="button" className="ui-button" disabled title="Coming soon">
+                      News
+                    </button>
+                  </div>
+
+                  {focusedView === "summary" && (
+                    <div className="focused-summary-grid">
+                      <KeyStatsTable panel={focusedPanel} />
+                      <section className="focused-interpretation">
+                        <h3>Interpretation</h3>
+                        {normalizeList(focusedPanel.interpretation).length > 0 ? (
+                          <ul className="bullet-list compact">
+                            {normalizeList(focusedPanel.interpretation).map((line, index) => (
+                              <li key={index}>{line}</li>
+                            ))}
+                          </ul>
+                        ) : (
+                          <p className="empty-copy">No interpretation available</p>
+                        )}
+                        <p className="muted news-note">News tab: Coming soon.</p>
+                      </section>
+                    </div>
+                  )}
+                </section>
+              )}
+
+              <ChartGrid
+                tab={activeTab}
+                panels={panels}
+                focusedPanelId={focusedPanel?.id || null}
+                onSelectPanel={selectFocusedPanel}
+              />
             </div>
           )}
         </div>

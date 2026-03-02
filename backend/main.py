@@ -154,8 +154,14 @@ def _compute_outputs(series: list[float], lookback: int, trend_window: int = 60)
     partial = False
 
     try:
-        percentile = round(rolling_percentile(series, lookback=lookback), 2)
-        regime = classify_regime(percentile)
+        percentile_raw = rolling_percentile(series, lookback=lookback)
+        if percentile_raw is None:
+            partial = True
+            percentile = None
+            regime = None
+        else:
+            percentile = round(percentile_raw, 2)
+            regime = classify_regime(percentile)
     except ValueError:
         partial = True
         percentile = None
@@ -542,27 +548,29 @@ def _build_intraday_panel_specs(conn) -> list[dict]:
     yield_value = [value for value, _row_date in yield_pairs]
     yield_dates = [row_date for _value, row_date in yield_pairs]
 
+    intraday_pctl_lookback = _env_int("MEI_INTRADAY_PCTL_LOOKBACK", default=126, minimum=2)
+
     return [
         {
             "id": "intraday_spy_state",
             "title": "Intraday SPY State",
             "series": spy_close,
             "series_dates": spy_dates,
-            "lookback": 20,
+            "lookback": intraday_pctl_lookback,
         },
         {
             "id": "intraday_vix_state",
             "title": "Intraday VIX State",
             "series": vix_close,
             "series_dates": vix_dates,
-            "lookback": 20,
+            "lookback": intraday_pctl_lookback,
         },
         {
             "id": "intraday_yield_state",
             "title": "Intraday 10Y Yield State",
             "series": yield_value,
             "series_dates": yield_dates,
-            "lookback": 20,
+            "lookback": intraday_pctl_lookback,
         },
     ]
 
@@ -637,8 +645,12 @@ def _build_swing_proxy_panel(
     else:
         try:
             latest = round(series[-1], 6)
-            percentile = round(rolling_percentile(series, lookback=pctl_lookback), 2)
-            regime = classify_regime(percentile)
+            percentile_raw = rolling_percentile(series, lookback=pctl_lookback)
+            if percentile_raw is None:
+                status = "partial"
+            else:
+                percentile = round(percentile_raw, 2)
+                regime = classify_regime(percentile)
         except ValueError:
             status = "partial"
         except Exception:
@@ -709,7 +721,7 @@ def _build_swing_panels(conn) -> list[dict]:
     swing_vix = os.getenv("MEI_SWING_VIX_TICKER", "I:VIX")
     swing_vol_etf = os.getenv("MEI_SWING_VOL_ETF", "VXX")
     trend_lookback = _env_int("MEI_SWING_LOOKBACK", default=60, minimum=2)
-    pctl_lookback = _env_int("MEI_SWING_PCTL_LOOKBACK", default=20, minimum=2)
+    pctl_lookback = _env_int("MEI_SWING_PCTL_LOOKBACK", default=252, minimum=2)
 
     breadth_a_rows, breadth_a_note = _safe_daily_rows(conn, breadth_a)
     breadth_b_rows, breadth_b_note = _safe_daily_rows(conn, breadth_b)

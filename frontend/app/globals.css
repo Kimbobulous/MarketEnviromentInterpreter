@@ -509,6 +509,15 @@ button {
   box-shadow: 0 18px 38px rgba(4, 10, 21, 0.7);
 }
 
+.chart-tile.is-selectable {
+  cursor: pointer;
+}
+
+.chart-tile.is-focused {
+  border-color: #4d75a3;
+  box-shadow: 0 16px 34px rgba(39, 86, 146, 0.35);
+}
+
 .chart-tile-head {
   display: flex;
   align-items: center;
@@ -524,6 +533,11 @@ button {
   display: flex;
   flex-wrap: wrap;
   gap: 0.45rem;
+}
+
+.tile-series-def {
+  font-size: 0.74rem;
+  letter-spacing: 0.01em;
 }
 
 .tile-pill-regime.regime-high {
@@ -673,6 +687,10 @@ button {
 
   .chart-tile.is-primary {
     grid-column: span 2;
+  }
+
+  .focused-summary-grid {
+    grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
   }
 
   .system-insight .accordion-wrap.open {
@@ -835,4 +853,85 @@ button {
   min-height: 120px;
   display: flex;
   align-items: center;
+}
+
+.focused-chart {
+  margin-bottom: 0.9rem;
+  padding: 0.9rem;
+}
+
+.focused-chart-head {
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-end;
+  gap: 0.6rem;
+  margin-bottom: 0.6rem;
+}
+
+.focused-subtabs {
+  display: flex;
+  gap: 0.5rem;
+  margin-top: 0.65rem;
+}
+
+.focused-subtabs .ui-button.is-active {
+  background: #1e3048;
+  border-color: #4f729f;
+}
+
+.focused-summary-grid {
+  display: grid;
+  gap: 0.75rem;
+  margin-top: 0.75rem;
+}
+
+.focused-interpretation {
+  border: 1px solid #2a3e57;
+  border-radius: 10px;
+  background: rgba(15, 24, 37, 0.6);
+  padding: 0.65rem 0.75rem;
+}
+
+.focused-interpretation h3 {
+  margin-bottom: 0.5rem;
+}
+
+.news-note {
+  margin-top: 0.6rem;
+  font-size: 0.76rem;
+}
+
+.key-stats-wrap {
+  border: 1px solid #2a3e57;
+  border-radius: 10px;
+  background: rgba(15, 24, 37, 0.6);
+  padding: 0.65rem 0.75rem;
+}
+
+.key-stats-wrap h3 {
+  margin-bottom: 0.5rem;
+}
+
+.key-stats-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 0.82rem;
+}
+
+.key-stats-table th,
+.key-stats-table td {
+  text-align: left;
+  padding: 0.32rem 0.18rem;
+  border-bottom: 1px solid #263950;
+}
+
+.key-stats-table th {
+  color: var(--text-muted);
+  font-weight: 500;
+}
+
+.key-stats-table td {
+  font-family: "IBM Plex Mono", "SFMono-Regular", Menlo, Consolas, monospace;
+  color: #dbe8fa;
+  text-align: right;
 }

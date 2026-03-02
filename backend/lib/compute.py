@@ -7,30 +7,35 @@ def rolling_percentile(series, lookback):
     """Return percentile rank (0-100) of last value vs prior lookback values.
 
     This implementation excludes the current value from the comparison set and
-    uses the most recent ``lookback`` prior values. Percentile is computed as:
+    uses the most recent ``lookback`` prior values.
 
-    ``100 * count(prior_value <= current_value) / lookback``
+    Tie handling uses midpoint rank among equals:
+
+    ``100 * (count(prior_value < current_value) + 0.5 * count(prior_value == current_value)) / lookback``
 
     Args:
         series: Ordered numeric values.
         lookback: Number of prior values to compare against.
 
     Returns:
-        float percentile rank in the inclusive range [0, 100].
+        float percentile rank in the inclusive range [0, 100], or ``None``
+        when there is insufficient history (< lookback + 1).
 
     Raises:
-        ValueError: If lookback is invalid or the series is too short.
+        ValueError: If lookback is invalid.
     """
 
     if lookback <= 0:
         raise ValueError("lookback must be a positive integer")
     if len(series) < lookback + 1:
-        raise ValueError("series length must be at least lookback + 1")
+        return None
 
     current = series[-1]
     prior = series[-(lookback + 1) : -1]
-    less_or_equal = sum(1 for value in prior if value <= current)
-    return 100.0 * less_or_equal / float(lookback)
+    count_less = sum(1 for value in prior if value < current)
+    count_equal = sum(1 for value in prior if value == current)
+    midpoint_rank = count_less + (0.5 * count_equal)
+    return 100.0 * midpoint_rank / float(lookback)
 
 
 def classify_regime(p):

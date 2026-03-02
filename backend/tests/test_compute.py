@@ -6,20 +6,33 @@ from backend.lib.compute import classify_regime, rolling_percentile, trend_slope
 
 
 def test_rolling_percentile_excludes_current_and_uses_prior_lookback():
-    series = [10, 20, 30, 40]
+    series = [1.0, 2.0, 2.0, 2.0]
     percentile = rolling_percentile(series, lookback=3)
-    assert percentile == 100.0
+    # Excluding current => prior [1, 2, 2], current=2:
+    # less=1, equal=2 => (1 + 0.5*2) / 3 = 2/3
+    assert math.isclose(percentile, 66.6666666667, rel_tol=0, abs_tol=1e-9)
+
+    # If current were incorrectly included in the reference set, this value would differ.
+    include_current_midpoint = 100.0 * ((1 + 0.5 * 3) / 4.0)
+    assert not math.isclose(percentile, include_current_midpoint, rel_tol=0, abs_tol=1e-9)
 
 
-def test_rolling_percentile_handles_ties_deterministically():
-    series = [1.0, 2.0, 2.0]
-    percentile = rolling_percentile(series, lookback=2)
-    assert percentile == 100.0
+def test_rolling_percentile_interior_value_not_pinned_to_extremes():
+    series = [10.0, 30.0, 20.0, 40.0, 25.0]
+    percentile = rolling_percentile(series, lookback=4)
+    assert percentile == 50.0
+    assert 0.0 < percentile < 100.0
 
 
-def test_rolling_percentile_requires_sufficient_series_length():
-    with pytest.raises(ValueError, match="lookback \\+ 1"):
-        rolling_percentile([1.0, 2.0], lookback=2)
+def test_rolling_percentile_handles_ties_with_midpoint_rank():
+    series = [1.0, 2.0, 2.0, 2.0, 4.0, 2.0]
+    percentile = rolling_percentile(series, lookback=5)
+    # prior [1,2,2,2,4], current=2 => less=1, equal=3 => (1 + 1.5) / 5 = 0.5
+    assert percentile == 50.0
+
+
+def test_rolling_percentile_returns_none_when_history_is_insufficient():
+    assert rolling_percentile([1.0, 2.0], lookback=2) is None
 
 
 def test_rolling_percentile_requires_positive_lookback():

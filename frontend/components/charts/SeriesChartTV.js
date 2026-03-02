@@ -1,7 +1,7 @@
 "use client";
 
-import { LineSeries, createChart } from "lightweight-charts";
-import { useEffect, useMemo, useRef } from "react";
+import { CrosshairMode, LineSeries, createChart } from "lightweight-charts";
+import { useEffect, useMemo, useRef, useState } from "react";
 
 const ISO_DATE_RE = /^\d{4}-\d{2}-\d{2}$/;
 
@@ -50,6 +50,38 @@ function normalizeAndOrder(points) {
   }
 
   return deduped;
+}
+
+function toDateLabel(rawTime) {
+  if (typeof rawTime === "number" && Number.isFinite(rawTime)) {
+    return new Date(rawTime * 1000).toISOString().slice(0, 10);
+  }
+
+  if (rawTime && typeof rawTime === "object") {
+    const y = rawTime.year;
+    const m = rawTime.month;
+    const d = rawTime.day;
+    if ([y, m, d].every((value) => typeof value === "number")) {
+      return `${y.toString().padStart(4, "0")}-${m.toString().padStart(2, "0")}-${d
+        .toString()
+        .padStart(2, "0")}`;
+    }
+  }
+
+  return "N/A";
+}
+
+function formatValue(value) {
+  if (typeof value !== "number" || !Number.isFinite(value)) {
+    return "N/A";
+  }
+  if (Math.abs(value) >= 100) {
+    return value.toFixed(2);
+  }
+  if (Math.abs(value) >= 10) {
+    return value.toFixed(3);
+  }
+  return value.toFixed(4);
 }
 
 function normalizeSeriesData(data, timeLabels) {
@@ -124,6 +156,7 @@ export default function SeriesChartTV({
 }) {
   const containerRef = useRef(null);
   const dataPoints = useMemo(() => normalizeSeriesData(data, timeLabels), [data, timeLabels]);
+  const [tooltip, setTooltip] = useState(null);
 
   useEffect(() => {
     if (!containerRef.current || dataPoints.length < 1) {
@@ -136,20 +169,38 @@ export default function SeriesChartTV({
       layout: {
         background: { color: "transparent" },
         textColor: "#95a7bd",
+        fontSize: 12,
       },
       grid: {
         vertLines: { color: "rgba(42, 63, 88, 0.35)" },
         horzLines: { color: "rgba(42, 63, 88, 0.35)" },
       },
       rightPriceScale: {
+        visible: true,
         borderVisible: false,
+        scaleMargins: { top: 0.14, bottom: 0.14 },
       },
       leftPriceScale: {
         visible: false,
         borderVisible: false,
       },
       timeScale: {
+        visible: true,
         borderVisible: false,
+        rightOffset: 2,
+      },
+      crosshair: {
+        mode: CrosshairMode.Normal,
+        vertLine: {
+          visible: true,
+          color: "rgba(132, 173, 216, 0.5)",
+          width: 1,
+        },
+        horzLine: {
+          visible: true,
+          color: "rgba(132, 173, 216, 0.42)",
+          width: 1,
+        },
       },
     });
 
@@ -169,6 +220,62 @@ export default function SeriesChartTV({
       chart.timeScale().fitContent();
     }
 
+    const previousByTime = new Map();
+    for (let index = 1; index < dataPoints.length; index += 1) {
+      previousByTime.set(dataPoints[index].time, dataPoints[index - 1].value);
+    }
+
+    const handleCrosshairMove = (param) => {
+      if (!containerRef.current || !param || !param.point || !param.time) {
+        setTooltip(null);
+        return;
+      }
+
+      const { x, y } = param.point;
+      const width = containerRef.current.clientWidth;
+      const heightPx = containerRef.current.clientHeight;
+      if (x < 0 || y < 0 || x > width || y > heightPx) {
+        setTooltip(null);
+        return;
+      }
+
+      const pointData = param.seriesData?.get(lineSeries);
+      const value =
+        typeof pointData?.value === "number"
+          ? pointData.value
+          : typeof pointData?.close === "number"
+            ? pointData.close
+            : null;
+      if (value === null) {
+        setTooltip(null);
+        return;
+      }
+
+      const epochTime =
+        typeof param.time === "number" && Number.isFinite(param.time)
+          ? Math.floor(param.time)
+          : null;
+      const previousValue = epochTime !== null ? previousByTime.get(epochTime) : undefined;
+      const deltaText =
+        typeof previousValue === "number" && Number.isFinite(previousValue)
+          ? `${value >= previousValue ? "+" : ""}${(value - previousValue).toFixed(4)}`
+          : null;
+
+      const tipWidth = 196;
+      const tipHeight = 64;
+      const left = Math.max(8, Math.min(width - tipWidth - 8, x + 12));
+      const top = Math.max(8, Math.min(heightPx - tipHeight - 8, y - tipHeight - 10));
+
+      setTooltip({
+        left,
+        top,
+        dateLabel: toDateLabel(param.time),
+        valueLabel: formatValue(value),
+        deltaText,
+      });
+    };
+    chart.subscribeCrosshairMove(handleCrosshairMove);
+
     const observer = new ResizeObserver(() => {
       if (!containerRef.current) {
         return;
@@ -178,6 +285,8 @@ export default function SeriesChartTV({
     observer.observe(containerRef.current);
 
     return () => {
+      chart.unsubscribeCrosshairMove(handleCrosshairMove);
+      setTooltip(null);
       observer.disconnect();
       chart.remove();
     };
@@ -200,7 +309,32 @@ export default function SeriesChartTV({
         </span>
       </div>
 
-      <div ref={containerRef} className="tv-series" />
+      <div style={{ position: "relative" }}>
+        <div ref={containerRef} className="tv-series" />
+        {tooltip && (
+          <div
+            style={{
+              position: "absolute",
+              left: tooltip.left,
+              top: tooltip.top,
+              zIndex: 12,
+              pointerEvents: "none",
+              borderRadius: 10,
+              border: "1px solid #355173",
+              background: "rgba(9, 16, 27, 0.95)",
+              color: "#deebfc",
+              padding: "0.42rem 0.55rem",
+              fontSize: "0.72rem",
+              lineHeight: 1.35,
+              minWidth: 170,
+            }}
+          >
+            <div>{tooltip.dateLabel}</div>
+            <div>Value: {tooltip.valueLabel}</div>
+            {tooltip.deltaText && <div>Δ: {tooltip.deltaText}</div>}
+          </div>
+        )}
+      </div>
 
       {safePercentile !== null && (
         <div className="tv-percentile-meter" aria-label={`Percentile ${safePercentile.toFixed(0)}`}>

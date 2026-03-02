@@ -1,7 +1,7 @@
 "use client";
 
-import { AreaSeries, createChart } from "lightweight-charts";
-import { useEffect, useMemo, useRef } from "react";
+import { AreaSeries, CrosshairMode, createChart } from "lightweight-charts";
+import { useEffect, useMemo, useRef, useState } from "react";
 
 const ISO_DATE_RE = /^\d{4}-\d{2}-\d{2}$/;
 
@@ -52,6 +52,41 @@ function normalizeAndOrder(points) {
   return deduped;
 }
 
+function toDateLabel(rawTime) {
+  if (typeof rawTime === "number" && Number.isFinite(rawTime)) {
+    return new Date(rawTime * 1000).toISOString().slice(0, 10);
+  }
+
+  if (rawTime && typeof rawTime === "object") {
+    const y = rawTime.year;
+    const m = rawTime.month;
+    const d = rawTime.day;
+    if ([y, m, d].every((value) => typeof value === "number")) {
+      return `${y.toString().padStart(4, "0")}-${m.toString().padStart(2, "0")}-${d
+        .toString()
+        .padStart(2, "0")}`;
+    }
+  }
+
+  return "N/A";
+}
+
+function formatValue(value) {
+  if (typeof value !== "number" || !Number.isFinite(value)) {
+    return "N/A";
+  }
+
+  if (Math.abs(value) >= 100) {
+    return value.toFixed(2);
+  }
+
+  if (Math.abs(value) >= 10) {
+    return value.toFixed(3);
+  }
+
+  return value.toFixed(4);
+}
+
 function buildSeriesData(data, times) {
   const source = Array.isArray(data) ? data : [];
   const values = source.filter((value) => typeof value === "number" && Number.isFinite(value));
@@ -90,6 +125,7 @@ function buildSeriesData(data, times) {
 export default function SparklineTV({ data, times, height = 48, color = "#5aa8ff" }) {
   const containerRef = useRef(null);
   const dataPoints = useMemo(() => buildSeriesData(data, times), [data, times]);
+  const [tooltip, setTooltip] = useState(null);
 
   useEffect(() => {
     if (!containerRef.current || dataPoints.length < 1) {
@@ -102,26 +138,39 @@ export default function SparklineTV({ data, times, height = 48, color = "#5aa8ff
       layout: {
         background: { color: "transparent" },
         textColor: "#95a7bd",
+        fontSize: 11,
       },
       grid: {
-        vertLines: { color: "transparent" },
-        horzLines: { color: "transparent" },
+        vertLines: { color: "rgba(42, 63, 88, 0.22)" },
+        horzLines: { color: "rgba(42, 63, 88, 0.22)" },
       },
       rightPriceScale: {
-        visible: false,
-        borderVisible: false,
+        visible: true,
+        borderVisible: true,
+        scaleMargins: { top: 0.2, bottom: 0.2 },
       },
       leftPriceScale: {
         visible: false,
         borderVisible: false,
       },
       timeScale: {
-        visible: false,
-        borderVisible: false,
+        visible: true,
+        borderVisible: true,
+        rightOffset: 2,
+        timeVisible: false,
       },
       crosshair: {
-        vertLine: { visible: false },
-        horzLine: { visible: false },
+        mode: CrosshairMode.Normal,
+        vertLine: {
+          visible: true,
+          color: "rgba(132, 173, 216, 0.5)",
+          width: 1,
+        },
+        horzLine: {
+          visible: true,
+          color: "rgba(132, 173, 216, 0.42)",
+          width: 1,
+        },
       },
       handleScroll: false,
       handleScale: false,
@@ -145,6 +194,62 @@ export default function SparklineTV({ data, times, height = 48, color = "#5aa8ff
       chart.timeScale().fitContent();
     }
 
+    const previousByTime = new Map();
+    for (let index = 1; index < dataPoints.length; index += 1) {
+      previousByTime.set(dataPoints[index].time, dataPoints[index - 1].value);
+    }
+
+    const handleCrosshairMove = (param) => {
+      if (!containerRef.current || !param || !param.point || !param.time) {
+        setTooltip(null);
+        return;
+      }
+
+      const { x, y } = param.point;
+      const width = containerRef.current.clientWidth;
+      const heightPx = containerRef.current.clientHeight;
+      if (x < 0 || y < 0 || x > width || y > heightPx) {
+        setTooltip(null);
+        return;
+      }
+
+      const pointData = param.seriesData?.get(series);
+      const value =
+        typeof pointData?.value === "number"
+          ? pointData.value
+          : typeof pointData?.close === "number"
+            ? pointData.close
+            : null;
+      if (value === null) {
+        setTooltip(null);
+        return;
+      }
+
+      const epochTime =
+        typeof param.time === "number" && Number.isFinite(param.time)
+          ? Math.floor(param.time)
+          : null;
+      const previousValue = epochTime !== null ? previousByTime.get(epochTime) : undefined;
+      const deltaText =
+        typeof previousValue === "number" && Number.isFinite(previousValue)
+          ? `${value >= previousValue ? "+" : ""}${(value - previousValue).toFixed(4)}`
+          : null;
+
+      const tipWidth = 170;
+      const tipHeight = 44;
+      const left = Math.max(8, Math.min(width - tipWidth - 8, x + 12));
+      const top = Math.max(8, Math.min(heightPx - tipHeight - 8, y - tipHeight - 8));
+
+      setTooltip({
+        left,
+        top,
+        dateLabel: toDateLabel(param.time),
+        valueLabel: formatValue(value),
+        deltaText,
+      });
+    };
+    chart.subscribeCrosshairMove(handleCrosshairMove);
+
     const observer = new ResizeObserver(() => {
       if (!containerRef.current) {
         return;
@@ -154,6 +259,8 @@ export default function SparklineTV({ data, times, height = 48, color = "#5aa8ff
     observer.observe(containerRef.current);
 
     return () => {
+      chart.unsubscribeCrosshairMove(handleCrosshairMove);
+      setTooltip(null);
       observer.disconnect();
       chart.remove();
     };
@@ -163,5 +270,31 @@ export default function SparklineTV({ data, times, height = 48, color = "#5aa8ff
     return <div className="chart-empty">No chart data</div>;
   }
 
-  return <div ref={containerRef} className="tv-sparkline" />;
+  return (
+    <div style={{ position: "relative" }}>
+      <div ref={containerRef} className="tv-sparkline" />
+      {tooltip && (
+        <div
+          style={{
+            position: "absolute",
+            left: tooltip.left,
+            top: tooltip.top,
+            zIndex: 8,
+            pointerEvents: "none",
+            borderRadius: 8,
+            border: "1px solid #2f4461",
+            background: "rgba(9, 16, 27, 0.92)",
+            color: "#dbe8fa",
+            padding: "0.3rem 0.45rem",
+            fontSize: "0.66rem",
+            lineHeight: 1.25,
+          }}
+        >
+          <div>{tooltip.dateLabel}</div>
+          <div>Value: {tooltip.valueLabel}</div>
+          {tooltip.deltaText && <div>Δ: {tooltip.deltaText}</div>}
+        </div>
+      )}
+    </div>
+  );
 }
