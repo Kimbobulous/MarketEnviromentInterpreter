@@ -389,3 +389,22 @@ button {
 .skeleton-list.short {
   width: 72%;
 }
+
+.panel-sparkline {
+  width: 150px;
+  height: 40px;
+  margin-top: 0.45rem;
+  display: block;
+}
+
+.panel-sparkline-area {
+  fill: rgba(87, 123, 164, 0.14);
+}
+
+.panel-sparkline-line {
+  fill: none;
+  stroke: #557ea8;
+  stroke-width: 2;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}

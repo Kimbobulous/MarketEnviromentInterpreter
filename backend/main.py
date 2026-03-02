@@ -165,6 +165,19 @@ def _compute_outputs(series: list[float], lookback: int, trend_window: int = 60)
     }
 
 
+def _panel_sparkline(series: list[float], max_points: int = 60) -> list[float]:
+    """Return capped sparkline values as plain floats."""
+    if not isinstance(series, list):
+        return []
+
+    tail = series[-max_points:] if len(series) > max_points else series
+    out: list[float] = []
+    for value in tail:
+        if isinstance(value, (int, float)):
+            out.append(float(value))
+    return out
+
+
 def build_panel(
     panel_id: str, title: str, series: list[float], lookback: int, tab_name: str
 ) -> dict:
@@ -193,6 +206,7 @@ def build_panel(
         "id": panel_id,
         "title": title,
         "raw_metrics": raw_metrics,
+        "sparkline": _panel_sparkline(series),
         "context": [],
         "interpretation": [],
         "why_toggle": "",
@@ -594,6 +608,7 @@ def _build_swing_proxy_panel(
         "id": panel_id,
         "title": title,
         "raw_metrics": raw_metrics,
+        "sparkline": _panel_sparkline(series),
         "context": [],
         "interpretation": [],
         "why_toggle": "",

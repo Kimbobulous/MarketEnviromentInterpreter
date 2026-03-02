@@ -15,6 +15,7 @@ PANEL_KEYS = {
     "id",
     "title",
     "raw_metrics",
+    "sparkline",
     "context",
     "interpretation",
     "why_toggle",
@@ -59,3 +60,6 @@ def test_intraday_real_data_payload_contract_with_mocked_client(monkeypatch):
         assert panel["status"] in {"ok", "partial", "error"}
         metric_keys = {metric.get("key") for metric in panel["raw_metrics"]}
         assert COMPUTE_METRIC_KEYS <= metric_keys
+        assert isinstance(panel["sparkline"], list)
+        assert len(panel["sparkline"]) <= 60
+        assert all(isinstance(value, (int, float)) for value in panel["sparkline"])

@@ -16,6 +16,7 @@ PANEL_KEYS = {
     "id",
     "title",
     "raw_metrics",
+    "sparkline",
     "context",
     "interpretation",
     "why_toggle",
@@ -89,6 +90,9 @@ def test_swing_panels_use_computed_proxy_metrics_and_guardrails(monkeypatch):
     for panel in payload["panels"]:
         assert set(panel.keys()) == PANEL_KEYS
         assert panel["status"] in {"ok", "partial", "error"}
+        assert isinstance(panel["sparkline"], list)
+        assert len(panel["sparkline"]) <= 60
+        assert all(isinstance(value, (int, float)) for value in panel["sparkline"])
 
         metric_keys = {metric.get("key") for metric in panel["raw_metrics"]}
         assert REQUIRED_RAW_METRIC_KEYS <= metric_keys

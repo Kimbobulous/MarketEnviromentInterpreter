@@ -17,6 +17,7 @@ PANEL_KEYS = {
     "id",
     "title",
     "raw_metrics",
+    "sparkline",
     "context",
     "interpretation",
     "why_toggle",
@@ -43,6 +44,9 @@ def _assert_payload_contract(payload):
         assert panel["status"] in {"ok", "partial", "error"}
         metric_keys = {metric.get("key") for metric in panel["raw_metrics"]}
         assert COMPUTE_METRIC_KEYS <= metric_keys
+        assert isinstance(panel["sparkline"], list)
+        assert len(panel["sparkline"]) <= 60
+        assert all(isinstance(value, (int, float)) for value in panel["sparkline"])
 
 
 def _assert_no_banned_phrases(text: str):

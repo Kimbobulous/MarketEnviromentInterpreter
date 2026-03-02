@@ -72,6 +72,47 @@ function BulletSection({ title, items }) {
   );
 }
 
+function Sparkline({ values, width = 140, height = 36 }) {
+  if (!Array.isArray(values) || values.length === 0) {
+    return null;
+  }
+
+  const points = values
+    .filter((value) => typeof value === "number" && Number.isFinite(value))
+    .map((value) => Number(value));
+
+  if (points.length < 2) {
+    return null;
+  }
+
+  const min = Math.min(...points);
+  const max = Math.max(...points);
+  const range = max - min || 1;
+  const xStep = width / (points.length - 1);
+
+  const linePoints = points
+    .map((value, index) => {
+      const x = index * xStep;
+      const y = height - ((value - min) / range) * height;
+      return `${x.toFixed(2)},${y.toFixed(2)}`;
+    })
+    .join(" ");
+
+  const areaPoints = `0,${height} ${linePoints} ${width},${height}`;
+
+  return (
+    <svg
+      className="panel-sparkline"
+      viewBox={`0 0 ${width} ${height}`}
+      role="img"
+      aria-label="Panel sparkline"
+    >
+      <polygon points={areaPoints} className="panel-sparkline-area" />
+      <polyline points={linePoints} className="panel-sparkline-line" />
+    </svg>
+  );
+}
+
 export default function PanelCard({ panel, fallbackTitle }) {
   const [showWhy, setShowWhy] = useState(false);
 
@@ -94,6 +135,13 @@ export default function PanelCard({ panel, fallbackTitle }) {
     () => (Array.isArray(safePanel.raw_metrics) ? safePanel.raw_metrics : []),
     [safePanel.raw_metrics]
   );
+  const sparkline = useMemo(
+    () =>
+      Array.isArray(safePanel.sparkline)
+        ? safePanel.sparkline.filter((value) => typeof value === "number" && Number.isFinite(value))
+        : [],
+    [safePanel.sparkline]
+  );
 
   const context = normalizeList(safePanel.context);
   const interpretation = normalizeList(safePanel.interpretation);
@@ -106,6 +154,7 @@ export default function PanelCard({ panel, fallbackTitle }) {
         <div>
           <h3 className="panel-title">{title}</h3>
           {lastUpdated && <p className="panel-meta">Last updated: {lastUpdated}</p>}
+          <Sparkline values={sparkline} />
         </div>
         <span className={badgeClass}>{statusRaw}</span>
       </header>
