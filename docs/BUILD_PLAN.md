@@ -101,7 +101,7 @@ Intraday tab renders backend JSON.
 ---
 
 ## Milestone 4 — Compute Utility Layer
-Status: ⏳ Pending
+Status: ✅ COMPLETE
 
 Goal:
 - Rolling percentile function
@@ -112,10 +112,17 @@ Goal:
 Deliverable:
 Reusable compute module in backend/lib/.
 
+- [x] `backend/lib/compute.py` (rolling_percentile, classify_regime, trend_slope)
+- [x] Deterministic unit tests (pytest)
+- [x] Compute integrated into stub payload generation for `/api/intraday` + `/api/swing`
+- [x] Panel status handling (`ok`/`partial`/`error`) + computed sensitivity + summary
+- [x] Refactor/shared builders to reduce duplication
+- [x] Import/package fix (`backend` as package via `__init__.py`) so pytest works
+
 ---
 
 ## Milestone 5 — Interpretation Engine v1
-Status: ⏳ Pending
+Status: ⏳ In Progress
 
 Goal:
 - Template-driven panel text generation
@@ -126,6 +133,12 @@ Goal:
 
 Deliverable:
 Panel + tab summary generated from states.
+
+Next:
+- Template-driven generation
+- Language guardrails
+- Conflict detection
+- Summary synthesis
 
 ---
 
@@ -202,10 +215,10 @@ Publicly accessible MEI dashboard.
 # 4. Current Status
 
 Current Milestone:
-Milestone 4 — Compute Utility Layer
+Milestone 5 — Interpretation Engine v1
 
 Backend:
-Fully operational skeleton.
+Compute utility layer complete and integrated into deterministic stub payload generation.
 
 Frontend:
 Dashboard UI scaffold complete with Intraday/Swing tabs, panel layouts, PanelCard sections, and shared sensitivity/summary rendering via proxy-backed API routes.
@@ -236,4 +249,4 @@ Dashboard UI scaffold complete with Intraday/Swing tabs, panel layouts, PanelCar
 
 # 7. Next Immediate Action
 
-Implement Milestone 4 compute utilities in backend/lib/ (rolling percentile, regime classification, trend slope) with deterministic unit tests.
+Begin Milestone 5: implement template-driven interpretation generation + language guardrails (no prediction words) for one Intraday panel.
