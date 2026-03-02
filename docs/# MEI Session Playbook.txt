@@ -37,3 +37,7 @@ Rules
 8) Additive fields must not break consumers.
    - Panel payloads may include additive metadata such as `sparkline_times` and `window_meta`.
    - Frontend/tests must tolerate additive keys without strict equality checks on full panel key sets.
+
+9) Debug endpoints must be documented and read-only.
+   - Any new debug endpoint must be explicitly listed in project docs.
+   - Debug endpoints must not mutate state or alter production API contracts.

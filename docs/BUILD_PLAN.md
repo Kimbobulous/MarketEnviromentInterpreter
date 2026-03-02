@@ -265,6 +265,29 @@ Modern chart-dominant frontend with right-rail system insight and polished state
 
 ---
 
+## Refinement Milestone — Lookback Selector + Percentile Sanity + Provider Hardening
+Status: ✅ COMPLETE
+
+Deliverable:
+User-selectable lookback windows, proxy-safe volatility source behavior, and debug percentile diagnostics.
+
+- [x] Backend supports `lookback` query selector (`20/60/252`) on:
+  - `GET /api/intraday`
+  - `GET /api/swing`
+- [x] Additive metadata emitted when selector is used:
+  - `payload.window_meta.lookback_selected`
+  - `panels[].window_meta.lookback_selected`
+- [x] Frontend lookback selector implemented and wired through Next.js proxy routes
+- [x] VIX index access hardening:
+  - falls back to VIX proxy ticker (`VXX`) when index access returns provider `403`
+  - labels explicitly indicate proxy usage (no index mislabeling)
+- [x] `/api/market/status` expanded with per-source diagnostics + `last_error` + `label`
+- [x] Added debug-only endpoint:
+  - `GET /api/debug/percentile_sanity`
+  - Reports percentile distribution summaries (min/max/mean and extreme-count diagnostics) for SPY, VXX, DGS10 across lookbacks 126 and 252
+
+---
+
 ## Milestone 10 — Deployment
 Status: ⏳ Pending
 
@@ -308,6 +331,9 @@ Dashboard now uses a chart-first tile layout with a right-rail System Insight mo
 - Conditional Sensitivity is collapsed by default and Summary is always visible.
 - Next.js proxy routes exist for both `/api/intraday` and `/api/swing`.
 - UI handles loading, error, and missing-panel states gracefully.
+- VIX source behavior now explicitly supports proxy fallback (`VXX`) when index access is forbidden.
+- Debug-only percentile diagnostics endpoint exists for distribution sanity checks:
+  - `GET /api/debug/percentile_sanity`
 
 ---
 
@@ -326,7 +352,5 @@ Dashboard now uses a chart-first tile layout with a right-rail System Insight mo
 
 Continue UI/UX upgrades:
 
-- Add chart tooltips + hover crosshair values
-- Add lookback selector (20/60/252)
 - Add force weight visualization (bar/radar) in System Insight
 - Add user-select ticker support (later phase)

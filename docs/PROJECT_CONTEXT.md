@@ -24,6 +24,7 @@ Endpoints:
 - GET /api/intraday
 - GET /api/swing
 - GET /api/market/status
+- GET /api/debug/percentile_sanity
 - GET /api/snapshots/latest
 - GET /api/snapshots/{snapshot_id}
 - GET /api/audit
@@ -33,6 +34,7 @@ Data + compute pipeline (current truth):
 - Real market data providers are active:
   - Massive/Polygon (daily OHLC for SPY/VIX and swing proxy tickers)
   - FRED (macro yield series, default DGS10)
+- Volatility source handling includes a VIX proxy fallback (`VXX`) when index access is forbidden.
 - SQLite-backed market cache is active (`market_cache` table).
 - Snapshot persistence is active (`snapshots` + `audit_log`).
 - Last-good fallback is active for both `/api/intraday` and `/api/swing` if a build/provider failure occurs.
@@ -86,6 +88,10 @@ Frontend fetch rules:
   - /api/swing
 - Next.js route handlers proxy internally to:
   http://127.0.0.1:8000/...
+- Lookback selector behavior:
+  - UI default lookback is `60` on first load.
+  - Frontend forwards `lookback` query params through Next.js proxy routes to backend.
+  - Supported lookbacks: `20`, `60`, `252`.
 
 Current status:
 - Proxy working

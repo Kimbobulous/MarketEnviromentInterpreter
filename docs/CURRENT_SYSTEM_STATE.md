@@ -25,6 +25,13 @@
 - Summary engine:
   - Weighting engine is active
   - Structured summary format includes `Lead`, `Support`, `Mixed`/signal balance, `Scope`, and `Diagnostics`
+- Lookback selector support:
+  - `GET /api/intraday?lookback=20|60|252`
+  - `GET /api/swing?lookback=20|60|252`
+  - Invalid lookbacks return HTTP 400 with a clear error message
+- Volatility source behavior:
+  - VIX index access may be forbidden by provider permissions
+  - System uses VIX proxy (`VXX`) fallback and labels it explicitly
 
 ## API Payload Notes
 - `/api/intraday` and `/api/swing` are computed real-data payloads.
@@ -32,6 +39,16 @@
   - `sparkline`
   - `sparkline_times`
   - `window_meta` (when present: series points, target/min bars, lookbacks, percentile mode)
+- Lookback metadata (additive):
+  - `payload.window_meta.lookback_selected` (when lookback query param is used)
+  - `panels[].window_meta.lookback_selected` (when lookback query param is used)
+- `/api/market/status` includes per-source diagnostics and additive fields:
+  - `provider_rows`, `clean_rows`, `rows_after_intersection`, `rows_used_for_percentile`
+  - `last_error`, `label`
+  - Current volatility source label is `VIX proxy (VXX)`
+- Debug endpoint:
+  - `GET /api/debug/percentile_sanity` (read-only)
+  - Purpose: percentile distribution sanity diagnostics (extremes and clustering checks) for SPY, VXX, DGS10 at lookbacks 126 and 252
 
 ## Frontend
 - Dark quant UI is active.
@@ -39,6 +56,7 @@
 - Lightweight Charts v5 is active.
 - Focused chart + stats/summary UI state is active.
 - Codespaces rule remains: browser hits frontend routes only; frontend proxies to backend internally.
+- Lookback selector UI is active (20/60/252) with default selection `60` on first load.
 
 ## Open Focus
 - Bar-count verification against provider-returned rows and overlap intersections
