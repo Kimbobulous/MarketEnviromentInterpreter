@@ -2,17 +2,27 @@
 
 import { useEffect, useState } from "react";
 import MeiTabs from "../components/mei/MeiTabs";
-import PanelCard from "../components/mei/PanelCard";
-import SensitivitySection from "../components/mei/SensitivitySection";
-import SummarySection from "../components/mei/SummarySection";
+import ChartTile from "../components/mei/ChartTile";
+import SystemInsight from "../components/mei/SystemInsight";
+import { normalizeList } from "../lib/normalize";
 
-function PanelLayout({ tab, panels }) {
-  const safePanels = Array.isArray(panels) ? panels : [];
+function formatTimestamp(value) {
+  if (!value || typeof value !== "string") {
+    return "Waiting for data";
+  }
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) {
+    return value;
+  }
+  return date.toLocaleString();
+}
 
+function ChartGrid({ tab, panels }) {
+  const safePanels = Array.isArray(panels) ? panels.filter(Boolean) : [];
   return (
-    <section className={`panel-grid ${tab === "swing" ? "panel-grid-swing" : "panel-grid-intraday"}`}>
+    <section className={`quant-grid ${tab === "swing" ? "quant-grid-swing" : "quant-grid-intraday"}`}>
       {safePanels.map((panel, index) => (
-        <PanelCard key={panel?.id || `${tab}-panel-${index}`} panel={panel} fallbackTitle={`Panel ${index + 1}`} />
+        <ChartTile key={panel?.id || `${tab}-panel-${index}`} panel={panel} index={index} tab={tab} />
       ))}
     </section>
   );
@@ -21,14 +31,12 @@ function PanelLayout({ tab, panels }) {
 function LoadingSkeleton({ tab }) {
   const count = tab === "swing" ? 4 : 3;
   return (
-    <section className={`panel-grid ${tab === "swing" ? "panel-grid-swing" : "panel-grid-intraday"}`}>
+    <section className={`quant-grid ${tab === "swing" ? "quant-grid-swing" : "quant-grid-intraday"}`}>
       {Array.from({ length: count }).map((_, index) => (
-        <article className="dashboard-card panel-card" key={`${tab}-skeleton-${index}`}>
+        <article className="quant-tile surface" key={`${tab}-skeleton-${index}`}>
           <div className="skeleton skeleton-title" />
           <div className="skeleton skeleton-meta" />
-          <div className="skeleton skeleton-row" />
-          <div className="skeleton skeleton-row" />
-          <div className="skeleton skeleton-row short" />
+          <div className="skeleton quant-skeleton-chart" />
           <div className="skeleton skeleton-list" />
           <div className="skeleton skeleton-list short" />
         </article>
@@ -42,6 +50,7 @@ export default function HomePage() {
   const [payload, setPayload] = useState(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
+  const [railOpen, setRailOpen] = useState(false);
 
   async function fetchPayload(tab) {
     const endpoint = tab === "intraday" ? "/api/intraday" : "/api/swing";
@@ -49,7 +58,6 @@ export default function HomePage() {
     try {
       setLoading(true);
       setError(null);
-      setPayload(null);
 
       const response = await fetch(endpoint);
       if (!response.ok) {
@@ -70,40 +78,54 @@ export default function HomePage() {
     fetchPayload(activeTab);
   }, [activeTab]);
 
+  useEffect(() => {
+    setRailOpen(false);
+  }, [activeTab]);
+
+  const summary = normalizeList(payload?.summary);
+  const sensitivity = normalizeList(payload?.conditional_sensitivity);
+
   return (
-    <main className="dashboard-shell">
-      <header className="dashboard-header">
-        <h1>Market Environment Interpreter</h1>
-        <p className="subtle-source">
-          Data source: {activeTab === "intraday" ? "/api/intraday" : "/api/swing"}
-        </p>
-      </header>
-
-      <MeiTabs activeTab={activeTab} onChange={setActiveTab} />
-
-      {loading && <LoadingSkeleton tab={activeTab} />}
-
-      {error && (
-        <div className="error-banner" role="alert">
-          <p>{error}</p>
-          <button type="button" className="ui-button" onClick={() => fetchPayload(activeTab)}>
-            Retry
+    <main className="quant-app">
+      <header className="quant-topbar surface">
+        <div>
+          <p className="quant-kicker">MEI Terminal</p>
+          <h1>Market Environment Interpreter</h1>
+          <p className="subtle-source">Data source: {activeTab === "intraday" ? "/api/intraday" : "/api/swing"}</p>
+        </div>
+        <div className="quant-topbar-controls">
+          <MeiTabs activeTab={activeTab} onChange={setActiveTab} />
+          <p className="muted quant-updated">Updated: {formatTimestamp(payload?.last_updated)}</p>
+          <button type="button" className="ui-button rail-toggle" onClick={() => setRailOpen((prev) => !prev)}>
+            {railOpen ? "Hide Insight" : "Show Insight"}
           </button>
         </div>
-      )}
+      </header>
 
-      {!loading && !error && (
-        <>
-          <PanelLayout tab={activeTab} panels={payload && Array.isArray(payload.panels) ? payload.panels : []} />
+      <section className="quant-main-grid">
+        <div className="quant-left-col">
+          {loading && <LoadingSkeleton tab={activeTab} />}
 
-          {payload !== null && (
-            <section className="below-panels">
-              <SensitivitySection items={payload.conditional_sensitivity} />
-              <SummarySection items={payload.summary} />
-            </section>
+          {error && (
+            <div className="error-banner" role="alert">
+              <p>{error}</p>
+              <button type="button" className="ui-button" onClick={() => fetchPayload(activeTab)}>
+                Retry
+              </button>
+            </div>
           )}
-        </>
-      )}
+
+          {!loading && !error && (
+            <div key={activeTab} className="tab-switch-fade">
+              <ChartGrid tab={activeTab} panels={payload && Array.isArray(payload.panels) ? payload.panels : []} />
+            </div>
+          )}
+        </div>
+
+        <aside className={`quant-right-rail surface ${railOpen ? "open" : ""}`}>
+          <SystemInsight summaryItems={summary} sensitivityItems={sensitivity} loading={loading} />
+        </aside>
+      </section>
     </main>
   );
 }

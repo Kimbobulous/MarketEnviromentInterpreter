@@ -1,4 +1,4 @@
-from datetime import datetime, timezone
+from datetime import date, datetime, timedelta, timezone
 from contextlib import asynccontextmanager
 import math
 import os
@@ -120,6 +120,31 @@ def panel_status(percentile, slope):
     return "ok"
 
 
+def _is_iso_date_string(value) -> bool:
+    if not isinstance(value, str):
+        return False
+    if len(value) != 10:
+        return False
+    try:
+        datetime.strptime(value, "%Y-%m-%d")
+    except ValueError:
+        return False
+    return True
+
+
+def _fallback_business_day_times(count: int) -> list[str]:
+    if count <= 0:
+        return []
+
+    out: list[str] = []
+    cursor = date(2000, 1, 3)  # Monday
+    while len(out) < count:
+        if cursor.weekday() < 5:
+            out.append(cursor.isoformat())
+        cursor += timedelta(days=1)
+    return out
+
+
 def _compute_outputs(series: list[float], lookback: int, trend_window: int = 60) -> dict:
     percentile = None
     regime = None
@@ -165,21 +190,40 @@ def _compute_outputs(series: list[float], lookback: int, trend_window: int = 60)
     }
 
 
-def _panel_sparkline(series: list[float], max_points: int = 60) -> list[float]:
-    """Return capped sparkline values as plain floats."""
+def _panel_sparkline_with_times(
+    series: list[float], series_dates: list[str] | None = None, max_points: int = 60
+) -> tuple[list[float], list[str]]:
+    """Return capped sparkline values and aligned ISO date labels."""
     if not isinstance(series, list):
-        return []
+        return [], []
 
-    tail = series[-max_points:] if len(series) > max_points else series
-    out: list[float] = []
-    for value in tail:
-        if isinstance(value, (int, float)):
-            out.append(float(value))
-    return out
+    if isinstance(series_dates, list) and len(series_dates) == len(series):
+        paired: list[tuple[float, str]] = []
+        for value, row_date in zip(series, series_dates):
+            if not isinstance(value, (int, float)):
+                continue
+            if not _is_iso_date_string(row_date):
+                continue
+            paired.append((float(value), row_date))
+
+        tail_pairs = paired[-max_points:] if len(paired) > max_points else paired
+        sparkline = [value for value, _row_date in tail_pairs]
+        sparkline_times = [row_date for _value, row_date in tail_pairs]
+        return sparkline, sparkline_times
+
+    numeric_values = [float(value) for value in series if isinstance(value, (int, float))]
+    sparkline = numeric_values[-max_points:] if len(numeric_values) > max_points else numeric_values
+    sparkline_times = _fallback_business_day_times(len(sparkline))
+    return sparkline, sparkline_times
 
 
 def build_panel(
-    panel_id: str, title: str, series: list[float], lookback: int, tab_name: str
+    panel_id: str,
+    title: str,
+    series: list[float],
+    lookback: int,
+    tab_name: str,
+    series_dates: list[str] | None = None,
 ) -> dict:
     timestamp = _iso_now()
     computed = _compute_outputs(series, lookback)
@@ -202,11 +246,14 @@ def build_panel(
         {"key": "trend_direction", "value": trend_direction, "unit": ""},
     ]
 
+    sparkline, sparkline_times = _panel_sparkline_with_times(series, series_dates)
+
     panel = {
         "id": panel_id,
         "title": title,
         "raw_metrics": raw_metrics,
-        "sparkline": _panel_sparkline(series),
+        "sparkline": sparkline,
+        "sparkline_times": sparkline_times,
         "context": [],
         "interpretation": [],
         "why_toggle": "",
@@ -348,6 +395,7 @@ def build_payload(tab_name: str, panel_specs: list[dict]) -> dict:
             series=spec["series"],
             lookback=spec["lookback"],
             tab_name=tab_name,
+            series_dates=spec.get("series_dates"),
         )
         for spec in panel_specs
     ]
@@ -459,15 +507,23 @@ def get_market_status():
     return {"sources": sources}
 
 
-def _extract_numeric_series(rows: list[dict], value_key: str) -> list[float]:
+def _extract_numeric_series_with_dates(
+    rows: list[dict], value_key: str
+) -> tuple[list[float], list[str]]:
     series: list[float] = []
+    dates: list[str] = []
     for row in rows:
         if not isinstance(row, dict):
             continue
         value = row.get(value_key)
-        if isinstance(value, (int, float)):
-            series.append(float(value))
-    return series
+        row_date = row.get("date")
+        if not isinstance(value, (int, float)):
+            continue
+        if not _is_iso_date_string(row_date):
+            continue
+        series.append(float(value))
+        dates.append(row_date)
+    return series, dates
 
 
 def _build_intraday_panel_specs(conn) -> list[dict]:
@@ -475,27 +531,37 @@ def _build_intraday_panel_specs(conn) -> list[dict]:
     vix_rows = get_vix_daily(conn)
     yield_rows = get_yield_daily(conn)
 
-    spy_close = _extract_numeric_series(spy_rows, "close")
-    vix_close = _extract_numeric_series(vix_rows, "close")
-    yield_value = [value for value in _extract_numeric_series(yield_rows, "value") if value > 0]
+    spy_close, spy_dates = _extract_numeric_series_with_dates(spy_rows, "close")
+    vix_close, vix_dates = _extract_numeric_series_with_dates(vix_rows, "close")
+    yield_values, yield_dates_all = _extract_numeric_series_with_dates(yield_rows, "value")
+    yield_pairs = [
+        (value, row_date)
+        for value, row_date in zip(yield_values, yield_dates_all)
+        if isinstance(value, (int, float)) and value > 0 and _is_iso_date_string(row_date)
+    ]
+    yield_value = [value for value, _row_date in yield_pairs]
+    yield_dates = [row_date for _value, row_date in yield_pairs]
 
     return [
         {
             "id": "intraday_spy_state",
             "title": "Intraday SPY State",
             "series": spy_close,
+            "series_dates": spy_dates,
             "lookback": 20,
         },
         {
             "id": "intraday_vix_state",
             "title": "Intraday VIX State",
             "series": vix_close,
+            "series_dates": vix_dates,
             "lookback": 20,
         },
         {
             "id": "intraday_yield_state",
             "title": "Intraday 10Y Yield State",
             "series": yield_value,
+            "series_dates": yield_dates,
             "lookback": 20,
         },
     ]
@@ -517,16 +583,17 @@ def _rows_to_close_map(rows: list[dict]) -> dict[str, float]:
             continue
         row_date = row.get("date")
         close = row.get("close")
-        if isinstance(row_date, str) and isinstance(close, (int, float)) and close > 0:
+        if _is_iso_date_string(row_date) and isinstance(close, (int, float)) and close > 0:
             out[row_date] = float(close)
     return out
 
 
-def _build_log_ratio_series(rows_a: list[dict], rows_b: list[dict]) -> list[float]:
+def _build_log_ratio_series(rows_a: list[dict], rows_b: list[dict]) -> tuple[list[float], list[str]]:
     a_by_date = _rows_to_close_map(rows_a)
     b_by_date = _rows_to_close_map(rows_b)
     common_dates = sorted(set(a_by_date.keys()) & set(b_by_date.keys()))
     series: list[float] = []
+    series_dates: list[str] = []
     for row_date in common_dates:
         a_close = a_by_date.get(row_date)
         b_close = b_by_date.get(row_date)
@@ -535,7 +602,8 @@ def _build_log_ratio_series(rows_a: list[dict], rows_b: list[dict]) -> list[floa
         if a_close <= 0 or b_close <= 0:
             continue
         series.append(math.log(a_close / b_close))
-    return series
+        series_dates.append(row_date)
+    return series, series_dates
 
 
 def _safe_daily_rows(conn, ticker: str) -> tuple[list[dict], str | None]:
@@ -550,6 +618,7 @@ def _build_swing_proxy_panel(
     title: str,
     source_tickers: str,
     series: list[float],
+    series_dates: list[str] | None,
     trend_lookback: int,
     pctl_lookback: int,
     data_note: str | None = None,
@@ -604,11 +673,14 @@ def _build_swing_proxy_panel(
         {"key": "source_tickers", "value": source_tickers, "unit": ""},
     ]
 
+    sparkline, sparkline_times = _panel_sparkline_with_times(series, series_dates)
+
     panel = {
         "id": panel_id,
         "title": title,
         "raw_metrics": raw_metrics,
-        "sparkline": _panel_sparkline(series),
+        "sparkline": sparkline,
+        "sparkline_times": sparkline_times,
         "context": [],
         "interpretation": [],
         "why_toggle": "",
@@ -652,13 +724,18 @@ def _build_swing_panels(conn) -> list[dict]:
     conc_note = " ".join([note for note in [conc_a_note, conc_b_note] if note]) or None
     sent_note = " ".join([note for note in [sent_a_note, sent_b_note] if note]) or None
     vol_combined_note = " ".join([note for note in [vix_note, vol_note] if note]) or None
+    breadth_series, breadth_dates = _build_log_ratio_series(breadth_a_rows, breadth_b_rows)
+    conc_series, conc_dates = _build_log_ratio_series(conc_a_rows, conc_b_rows)
+    sent_series, sent_dates = _build_log_ratio_series(sent_a_rows, sent_b_rows)
+    vol_series, vol_dates = _build_log_ratio_series(vol_rows, vix_rows)
 
     panels = [
         _build_swing_proxy_panel(
             panel_id="swing_breadth_participation",
             title="Swing Breadth Participation",
             source_tickers=f"{breadth_a}/{breadth_b}",
-            series=_build_log_ratio_series(breadth_a_rows, breadth_b_rows),
+            series=breadth_series,
+            series_dates=breadth_dates,
             trend_lookback=trend_lookback,
             pctl_lookback=pctl_lookback,
             data_note=breadth_note,
@@ -667,7 +744,8 @@ def _build_swing_panels(conn) -> list[dict]:
             panel_id="swing_concentration_tilt",
             title="Swing Concentration Tilt",
             source_tickers=f"{conc_a}/{conc_b}",
-            series=_build_log_ratio_series(conc_a_rows, conc_b_rows),
+            series=conc_series,
+            series_dates=conc_dates,
             trend_lookback=trend_lookback,
             pctl_lookback=pctl_lookback,
             data_note=conc_note,
@@ -676,7 +754,8 @@ def _build_swing_panels(conn) -> list[dict]:
             panel_id="swing_risk_sentiment",
             title="Swing Risk Sentiment",
             source_tickers=f"{sent_a}/{sent_b}",
-            series=_build_log_ratio_series(sent_a_rows, sent_b_rows),
+            series=sent_series,
+            series_dates=sent_dates,
             trend_lookback=trend_lookback,
             pctl_lookback=pctl_lookback,
             data_note=sent_note,
@@ -685,7 +764,8 @@ def _build_swing_panels(conn) -> list[dict]:
             panel_id="swing_vol_term_structure",
             title="Swing Volatility Term Structure Proxy",
             source_tickers=f"{swing_vol_etf}/{swing_vix}",
-            series=_build_log_ratio_series(vol_rows, vix_rows),
+            series=vol_series,
+            series_dates=vol_dates,
             trend_lookback=trend_lookback,
             pctl_lookback=pctl_lookback,
             data_note=vol_combined_note,

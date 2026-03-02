@@ -239,14 +239,29 @@ Deliverable:
 Disciplined tab summary engine.
 
 - [x] `backend/lib/weighting.py` force scoring + dominant factor detection + mixed-signal logic
-- [x] Structured 3–4 sentence summaries for intraday + swing (Lead/Support/Mixed/Scope)
-- [x] Optional Diagnostics summary line (regime/trend/tension counts)
+- [x] Structured summary lines for intraday + swing: Lead / Support / Mixed (or Signal balance) / Scope + Diagnostics
 - [x] Conditional sensitivity updated to be force-aware
 - [x] Tests:
   - `test_weighting.py` unit coverage
   - API payload tests assert new summary format + guardrails
   - Fallback tests ensure Lead/Support survives last-good snapshots
 - [x] Test status: `pytest -q` (58 passed)
+
+---
+
+## UI Milestone — Dark Quant UI + Chart-Dominant Layout
+Status: ✅ COMPLETE
+
+Deliverable:
+Modern chart-dominant frontend with right-rail system insight and polished states.
+
+- [x] Dark theme styling foundation across app shell and surfaces
+- [x] TradingView Lightweight Charts integration
+- [x] ChartTile + right-rail System Insight layout (chart-dominant)
+- [x] Loading/error polish for dark theme UX
+- [x] Dominant Force pill shown in UI
+- [x] Sparklines shown per panel
+- [x] Added `sparkline_times` to panels for time-aligned x-axis in charts (additive schema field)
 
 ---
 
@@ -267,23 +282,21 @@ Publicly accessible MEI dashboard.
 # 4. Current Status
 
 Current Milestone:
-Milestone 10 — Deployment
+Post-Milestone Focus: UI/UX Upgrades (Dark Quant iteration)
 
 Intraday and Swing are both powered by computed proxy-driven panels with persistence and fallback behavior.
 
-UI Polish Milestone:
+UI Milestone:
 Status: ✅ COMPLETE
 
-- [x] Modern global styling baseline (typography, tinted background, cards, badges, buttons)
-- [x] Segmented tabs styling (Intraday/Swing)
-- [x] Panel cards with improved hierarchy and "Why this matters" accordion
-- [x] Raw metrics rendered as key/value rows
-- [x] Responsive grids (no "Missing panel" placeholders)
-- [x] Skeleton loading + error banner + retry
-- [x] Sensitivity + Summary sections restyled
+- [x] Dark quant theme foundation and chart-dominant layout
+- [x] Lightweight-charts integration with panel sparklines
+- [x] Right-rail System Insight with dominant-force emphasis
+- [x] Additive `sparkline_times` field used for time-aligned chart x-axis
+- [x] Loading/error/collapsible interaction polish
 
 Frontend:
-Dashboard UI scaffold complete with Intraday/Swing tabs, panel layouts, PanelCard sections, and shared sensitivity/summary rendering via proxy-backed API routes.
+Dashboard now uses a chart-first tile layout with a right-rail System Insight model, backed by existing proxy API routes.
 
 ---
 
@@ -311,4 +324,9 @@ Dashboard UI scaffold complete with Intraday/Swing tabs, panel layouts, PanelCar
 
 # 7. Next Immediate Action
 
-Prep production env variables and hosting plan (frontend + backend), including secure secret handling (no .env committed).
+Continue UI/UX upgrades:
+
+- Add chart tooltips + hover crosshair values
+- Add lookback selector (20/60/252)
+- Add force weight visualization (bar/radar) in System Insight
+- Add user-select ticker support (later phase)

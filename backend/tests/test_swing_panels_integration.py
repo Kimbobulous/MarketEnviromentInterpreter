@@ -1,3 +1,4 @@
+import re
 import urllib.request
 
 from backend import main
@@ -17,6 +18,7 @@ PANEL_KEYS = {
     "title",
     "raw_metrics",
     "sparkline",
+    "sparkline_times",
     "context",
     "interpretation",
     "why_toggle",
@@ -91,8 +93,13 @@ def test_swing_panels_use_computed_proxy_metrics_and_guardrails(monkeypatch):
         assert set(panel.keys()) == PANEL_KEYS
         assert panel["status"] in {"ok", "partial", "error"}
         assert isinstance(panel["sparkline"], list)
+        assert isinstance(panel["sparkline_times"], list)
+        assert len(panel["sparkline_times"]) == len(panel["sparkline"])
+        assert len(panel["sparkline_times"]) <= 60
         assert len(panel["sparkline"]) <= 60
         assert all(isinstance(value, (int, float)) for value in panel["sparkline"])
+        assert all(isinstance(value, str) for value in panel["sparkline_times"])
+        assert all(re.match(r"^\d{4}-\d{2}-\d{2}$", value) for value in panel["sparkline_times"])
 
         metric_keys = {metric.get("key") for metric in panel["raw_metrics"]}
         assert REQUIRED_RAW_METRIC_KEYS <= metric_keys
