@@ -29,6 +29,7 @@ try:
     )
     from lib.snapshots import get_snapshot_by_id, list_audit, list_snapshots
     from lib.snapshots import get_last_good_snapshot, log_action, save_snapshot
+    from lib.weighting import build_structured_summary, classify_summary, score_forces
 except ModuleNotFoundError:  # package-context fallback for tests/importers
     from .lib.compute import classify_regime, rolling_percentile, trend_slope
     from .lib.db import connect, init_db
@@ -51,6 +52,7 @@ except ModuleNotFoundError:  # package-context fallback for tests/importers
     )
     from .lib.snapshots import get_snapshot_by_id, list_audit, list_snapshots
     from .lib.snapshots import get_last_good_snapshot, log_action, save_snapshot
+    from .lib.weighting import build_structured_summary, classify_summary, score_forces
 
 BACKEND_DIR = os.path.dirname(__file__)
 DOTENV_PATH = os.path.join(BACKEND_DIR, ".env")
@@ -270,47 +272,50 @@ def _build_payload_from_panels(tab_name: str, panels: list[dict]) -> dict:
     aggregates = _aggregate_tab_signals(panels)
     regime_counts = aggregates["regime_counts"]
     trend_counts = aggregates["trend_counts"]
-    dominant_regime = aggregates["dominant_regime"]
-    dominant_trend = aggregates["dominant_trend"]
     tension_panels = aggregates["tension_panels"]
-    top_tensions = aggregates["top_tensions"]
-    top_tension_text = ", ".join(top_tensions) if top_tensions else "none"
+    force_scores = score_forces(tab_name, panels)
+    force_summary = classify_summary(force_scores, tension_panels=tension_panels)
+    sorted_forces = force_summary.get("sorted_forces", [])
+    dominant_force = force_summary.get("dominant_force", "unknown")
+    second_force = (
+        sorted_forces[1][0]
+        if isinstance(sorted_forces, list)
+        and len(sorted_forces) > 1
+        and isinstance(sorted_forces[1], tuple)
+        else "supporting_forces"
+    )
 
     conditional_sensitivity = [
         guard_language(
-            f"If dominant regime shifts from {dominant_regime} to a lower-intensity bucket, risk-posture wording may need recalibration."
+            f"If {dominant_force} signals soften (e.g., regime shifts lower), leadership may rotate."
         ),
         guard_language(
-            f"If trend direction shifts from {dominant_trend} to an opposing state, current tension classifications may change."
-        ),
-        guard_language(
-            f"If partial panels decrease from {status_counts['partial']}/{panel_count}, interpretation confidence language may become more specific."
+            f"If {second_force} strengthens, mixed leadership could increase."
         ),
     ]
-
-    summary = [
-        guard_language(
-            f"Overview: Dominant regime is {dominant_regime} with {dominant_trend} trend across this tab."
-        ),
-        guard_language(
-            f"Regimes: High={regime_counts['High']}, Mid={regime_counts['Mid']}, Low={regime_counts['Low']}, Unknown={regime_counts['Unknown']}."
-        ),
-        guard_language(
-            f"Trends: Down={trend_counts['Down']}, Flat={trend_counts['Flat']}, Up={trend_counts['Up']}, Unknown={trend_counts['Unknown']}."
-        ),
-        guard_language(
-            f"Tensions: {tension_panels} panels show mixed signals (top: {top_tension_text})."
-        ),
-        guard_language(
-            "Notes: Interpretation is descriptive and based on current computed metrics."
-        ),
-    ]
-    if tab_name == "swing":
-        summary.append(
+    if status_counts["partial"] > 0:
+        conditional_sensitivity.append(
             guard_language(
-                "Coverage: Swing proxies cover breadth (RSP/SPY), concentration (QQQ/SPY), credit risk appetite (HYG/SHY), and volatility conditions."
+                f"If partial panels decline from {status_counts['partial']}/{panel_count}, confidence language may become more specific."
             )
         )
+    if tension_panels > 0 and len(conditional_sensitivity) < 4:
+        conditional_sensitivity.append(
+            guard_language(
+                f"If tension count changes from {tension_panels}, force leadership balance may shift."
+            )
+        )
+
+    summary = build_structured_summary(tab_name, force_summary)
+    summary.append(
+        guard_language(
+            "Diagnostics: Regimes H="
+            f"{regime_counts['High']} M={regime_counts['Mid']} L={regime_counts['Low']}; "
+            "Trends U="
+            f"{trend_counts['Up']} F={trend_counts['Flat']} D={trend_counts['Down']}; "
+            f"Tensions={tension_panels}."
+        )
+    )
 
     return {
         "tab": tab_name,

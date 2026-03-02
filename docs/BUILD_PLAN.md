@@ -227,7 +227,7 @@ Complete Swing tab panels.
 ---
 
 ## Milestone 9 — Summary Weighting Engine
-Status: ⏳ Pending
+Status: ✅ COMPLETE
 
 Goal:
 - Force weighting
@@ -237,6 +237,16 @@ Goal:
 
 Deliverable:
 Disciplined tab summary engine.
+
+- [x] `backend/lib/weighting.py` force scoring + dominant factor detection + mixed-signal logic
+- [x] Structured 3–4 sentence summaries for intraday + swing (Lead/Support/Mixed/Scope)
+- [x] Optional Diagnostics summary line (regime/trend/tension counts)
+- [x] Conditional sensitivity updated to be force-aware
+- [x] Tests:
+  - `test_weighting.py` unit coverage
+  - API payload tests assert new summary format + guardrails
+  - Fallback tests ensure Lead/Support survives last-good snapshots
+- [x] Test status: `pytest -q` (58 passed)
 
 ---
 
@@ -257,7 +267,7 @@ Publicly accessible MEI dashboard.
 # 4. Current Status
 
 Current Milestone:
-Milestone 9 — Summary Weighting Engine
+Milestone 10 — Deployment
 
 Intraday and Swing are both powered by computed proxy-driven panels with persistence and fallback behavior.
 
@@ -301,4 +311,4 @@ Dashboard UI scaffold complete with Intraday/Swing tabs, panel layouts, PanelCar
 
 # 7. Next Immediate Action
 
-Begin Milestone 9 Task 1: implement force weighting + dominant factor detection feeding a structured 3–4 sentence summary.
+Prep production env variables and hosting plan (frontend + backend), including secure secret handling (no .env committed).

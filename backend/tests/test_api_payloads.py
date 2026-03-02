@@ -1,6 +1,7 @@
 import re
 
 from backend.lib.interpret import BANNED_PHRASES
+from backend.lib.weighting import contains_force_keyword
 from backend.main import _build_panel, get_intraday, get_swing
 
 
@@ -123,31 +124,20 @@ def test_swing_compute_outputs_are_deterministic_between_calls():
 
 def test_summary_structure_counts_and_guardrails_for_both_endpoints():
     for payload in (get_intraday(), get_swing()):
-        panel_count = len(payload["panels"])
         assert payload["summary"]
         assert isinstance(payload["summary"], list)
 
-        overview = next((line for line in payload["summary"] if line.startswith("Overview:")), "")
-        regimes = next((line for line in payload["summary"] if line.startswith("Regimes:")), "")
-        trends = next((line for line in payload["summary"] if line.startswith("Trends:")), "")
-        assert overview
-        assert regimes
-        assert trends
-        if payload["tab"] == "swing":
-            coverage = next(
-                (line for line in payload["summary"] if line.startswith("Coverage:")),
-                "",
-            )
-            assert coverage
+        lead = next((line for line in payload["summary"] if line.startswith("Lead:")), "")
+        support = next((line for line in payload["summary"] if line.startswith("Support:")), "")
+        assert lead
+        assert support
+        assert 3 <= len(payload["summary"]) <= 5
 
         for line in payload["summary"]:
             _assert_no_banned_phrases(line)
 
-        regime_counts = _extract_counts(regimes)
-        trend_counts = _extract_counts(trends)
-        assert sum(regime_counts) == panel_count
-        assert sum(trend_counts) == panel_count
-
         assert isinstance(payload["conditional_sensitivity"], list)
         for line in payload["conditional_sensitivity"]:
             _assert_no_banned_phrases(line)
+        if payload["conditional_sensitivity"]:
+            assert contains_force_keyword(payload["conditional_sensitivity"])

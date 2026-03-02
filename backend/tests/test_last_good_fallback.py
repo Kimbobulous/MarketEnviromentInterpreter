@@ -80,6 +80,14 @@ def test_forced_fail_returns_last_good_when_available(tmp_path, monkeypatch):
     recovered = main.get_intraday()
 
     assert recovered == baseline
+    assert any(
+        isinstance(line, str) and line.startswith("Lead:")
+        for line in recovered.get("summary", [])
+    )
+    assert any(
+        isinstance(line, str) and line.startswith("Support:")
+        for line in recovered.get("summary", [])
+    )
 
     actions = _audit_actions(db_path)
     assert "build_failed" in actions
@@ -194,6 +202,14 @@ def test_swing_provider_failure_serves_last_good_and_logs_audit(tmp_path, monkey
 
     recovered = main.get_swing()
     assert recovered == baseline
+    assert any(
+        isinstance(line, str) and line.startswith("Lead:")
+        for line in recovered.get("summary", [])
+    )
+    assert any(
+        isinstance(line, str) and line.startswith("Support:")
+        for line in recovered.get("summary", [])
+    )
 
     swing_actions = _audit_actions_for_tab(db_path, "swing")
     assert "build_failed" in swing_actions
