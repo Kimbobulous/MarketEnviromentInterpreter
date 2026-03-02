@@ -1,3 +1,6 @@
+import re
+
+from backend.lib.interpret import BANNED_PHRASES
 from backend.main import _build_panel, get_intraday, get_swing
 
 
@@ -41,6 +44,16 @@ def _assert_payload_contract(payload):
         assert COMPUTE_METRIC_KEYS <= metric_keys
 
 
+def _assert_no_banned_phrases(text: str):
+    lowered = f" {text.lower()} "
+    for phrase in BANNED_PHRASES:
+        assert phrase.lower() not in lowered
+
+
+def _extract_counts(line: str) -> list[int]:
+    return [int(match) for match in re.findall(r"=(\d+)", line)]
+
+
 def _compute_metric_map(panel):
     return {metric.get("key"): metric.get("value") for metric in panel["raw_metrics"]}
 
@@ -70,7 +83,8 @@ def test_panel_partial_status_when_lookback_exceeds_history():
     metric_by_key = {metric["key"]: metric["value"] for metric in panel["raw_metrics"]}
     assert metric_by_key["percentile_lookback"] is None
     assert metric_by_key["regime"] is None
-    assert "insufficient history" in " ".join(panel["interpretation"]).lower()
+    combined_text = " ".join(panel["context"] + panel["interpretation"]).lower()
+    assert "insufficient history" in combined_text or "partial state" in combined_text
 
 
 def test_intraday_compute_outputs_are_deterministic_between_calls():
@@ -105,3 +119,29 @@ def test_swing_compute_outputs_are_deterministic_between_calls():
         assert isinstance(panel_a["last_updated"], str) and panel_a["last_updated"]
         assert isinstance(panel_b["last_updated"], str) and panel_b["last_updated"]
         assert _compute_metric_map(panel_a) == _compute_metric_map(panel_b)
+
+
+def test_summary_structure_counts_and_guardrails_for_both_endpoints():
+    for payload in (get_intraday(), get_swing()):
+        panel_count = len(payload["panels"])
+        assert payload["summary"]
+        assert isinstance(payload["summary"], list)
+
+        overview = next((line for line in payload["summary"] if line.startswith("Overview:")), "")
+        regimes = next((line for line in payload["summary"] if line.startswith("Regimes:")), "")
+        trends = next((line for line in payload["summary"] if line.startswith("Trends:")), "")
+        assert overview
+        assert regimes
+        assert trends
+
+        for line in payload["summary"]:
+            _assert_no_banned_phrases(line)
+
+        regime_counts = _extract_counts(regimes)
+        trend_counts = _extract_counts(trends)
+        assert sum(regime_counts) == panel_count
+        assert sum(trend_counts) == panel_count
+
+        assert isinstance(payload["conditional_sensitivity"], list)
+        for line in payload["conditional_sensitivity"]:
+            _assert_no_banned_phrases(line)

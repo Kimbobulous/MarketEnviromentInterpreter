@@ -4,8 +4,22 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
 from backend.lib.compute import classify_regime, rolling_percentile, trend_slope
+from backend.lib.interpret import (
+    detect_tensions,
+    extract_signals,
+    generate_interpretation,
+    guard_language,
+)
 
 app = FastAPI()
+
+TENSION_LABEL_ORDER = [
+    "High+Down",
+    "High+Flat",
+    "Mid+Down",
+    "Low+Up",
+    "Trend unavailable",
+]
 
 allow_origins = [
     "http://localhost:3000",
@@ -86,50 +100,75 @@ def build_panel(
         {"key": "trend_direction", "value": trend_direction, "unit": ""},
     ]
 
-    if status == "ok":
-        context = [
-            f"Regime bucket is {regime} from lookback percentile {percentile}.",
-            f"Trend direction is {trend_direction} with slope {slope}.",
-        ]
-        interpretation = [
-            f"{tab_name.capitalize()} regime is {regime} with {trend_direction} trend."
-        ]
-        why_toggle = (
-            f"Percentile over {lookback} prior observations and log-slope trend are used "
-            "to classify the current environment state."
-        )
-    elif status == "partial":
-        context = [
-            "Some compute inputs are insufficient for full state classification.",
-            f"Lookback={lookback}, history_length={len(series)}.",
-        ]
-        interpretation = ["Insufficient history for trend or percentile; state is partial."]
-        why_toggle = (
-            "A partial state occurs when lookback history or valid positive values are not "
-            "available for all compute metrics."
-        )
-    else:
-        context = ["A compute exception occurred while deriving this panel."]
-        interpretation = ["Compute error prevented full classification; state is error."]
-        why_toggle = "Unexpected compute errors are surfaced as error status for transparency."
-
-    return {
+    panel = {
         "id": panel_id,
         "title": title,
         "raw_metrics": raw_metrics,
-        "context": context,
-        "interpretation": interpretation,
-        "why_toggle": why_toggle,
+        "context": [],
+        "interpretation": [],
+        "why_toggle": "",
         "status": status,
         "last_updated": timestamp,
     }
 
+    generated = generate_interpretation(tab_name, panel)
+    panel["context"] = generated["context"]
+    panel["interpretation"] = generated["interpretation"]
+    panel["why_toggle"] = generated["why_toggle"]
 
-def _extract_metric_value(panel: dict, key: str):
-    for metric in panel.get("raw_metrics", []):
-        if metric.get("key") == key:
-            return metric.get("value")
-    return None
+    return panel
+
+
+def _dominant(counts: dict, precedence: list[str]) -> str:
+    max_count = max(counts.values()) if counts else 0
+    for label in precedence:
+        if counts.get(label, 0) == max_count:
+            return label
+    return precedence[-1]
+
+
+def _aggregate_tab_signals(panels: list[dict]) -> dict:
+    regime_counts = {"High": 0, "Mid": 0, "Low": 0, "Unknown": 0}
+    trend_counts = {"Down": 0, "Flat": 0, "Up": 0, "Unknown": 0}
+    tension_label_counts = {
+        "High+Down": 0,
+        "High+Flat": 0,
+        "Mid+Down": 0,
+        "Low+Up": 0,
+        "Trend unavailable": 0,
+    }
+    tension_panels = 0
+
+    for panel in panels:
+        signals = extract_signals(panel)
+        regime = signals.get("regime", "Unknown")
+        trend = signals.get("trend_direction", "Unknown")
+
+        regime_counts[regime if regime in regime_counts else "Unknown"] += 1
+        trend_counts[trend if trend in trend_counts else "Unknown"] += 1
+
+        tensions = detect_tensions(signals)
+        if tensions:
+            tension_panels += 1
+        for tension in tensions:
+            label = tension.get("label", "")
+            if label in tension_label_counts:
+                tension_label_counts[label] += 1
+
+    sorted_tensions = sorted(
+        tension_label_counts.items(),
+        key=lambda item: (-item[1], TENSION_LABEL_ORDER.index(item[0])),
+    )
+    top_tensions = [label for label, count in sorted_tensions if count > 0][:2]
+
+    return {
+        "regime_counts": regime_counts,
+        "trend_counts": trend_counts,
+        "tension_panels": tension_panels,
+        "top_tensions": top_tensions,
+        "dominant_regime": _dominant(regime_counts, ["High", "Mid", "Low", "Unknown"]),
+        "dominant_trend": _dominant(trend_counts, ["Down", "Flat", "Up", "Unknown"]),
+    }
 
 
 def build_payload(tab_name: str, panel_specs: list[dict]) -> dict:
@@ -149,43 +188,42 @@ def build_payload(tab_name: str, panel_specs: list[dict]) -> dict:
         status_counts[p["status"]] += 1
 
     panel_count = len(panels)
-    regime_counts = {"Low": 0, "Mid": 0, "High": 0}
-    trend_counts = {"Up": 0, "Down": 0, "Flat": 0}
-
-    for panel in panels:
-        regime = _extract_metric_value(panel, "regime")
-        if regime in regime_counts:
-            regime_counts[regime] += 1
-
-        trend_direction = _extract_metric_value(panel, "trend_direction")
-        if trend_direction in trend_counts:
-            trend_counts[trend_direction] += 1
+    aggregates = _aggregate_tab_signals(panels)
+    regime_counts = aggregates["regime_counts"]
+    trend_counts = aggregates["trend_counts"]
+    dominant_regime = aggregates["dominant_regime"]
+    dominant_trend = aggregates["dominant_trend"]
+    tension_panels = aggregates["tension_panels"]
+    top_tensions = aggregates["top_tensions"]
+    top_tension_text = ", ".join(top_tensions) if top_tensions else "none"
 
     conditional_sensitivity = [
-        (
-            f"If more panels shift to High regime (currently {regime_counts['High']}/"
-            f"{panel_count}), dispersion assumptions would likely become wider."
+        guard_language(
+            f"If dominant regime shifts from {dominant_regime} to a lower-intensity bucket, risk-posture wording may need recalibration."
         ),
-        (
-            f"If Up trends ({trend_counts['Up']}/{panel_count}) reverse toward Down "
-            "or Flat, directional interpretation would weaken."
+        guard_language(
+            f"If trend direction shifts from {dominant_trend} to an opposing state, current tension classifications may change."
         ),
-        (
-            f"If partial panels ({status_counts['partial']}/{panel_count}) gain enough history, "
-            "state confidence should improve."
+        guard_language(
+            f"If partial panels decrease from {status_counts['partial']}/{panel_count}, interpretation confidence language may become more specific."
         ),
     ]
 
     summary = [
-        f"{tab_name.capitalize()} has {status_counts['ok']}/{panel_count} panels in ok status "
-        f"({status_counts['partial']} partial, {status_counts['error']} error).",
-        (
-            f"Regime mix: Low {regime_counts['Low']}, Mid {regime_counts['Mid']}, "
-            f"High {regime_counts['High']}."
+        guard_language(
+            f"Overview: Dominant regime is {dominant_regime} with {dominant_trend} trend across this tab."
         ),
-        (
-            f"Trend mix: Up {trend_counts['Up']}, Down {trend_counts['Down']}, "
-            f"Flat {trend_counts['Flat']}."
+        guard_language(
+            f"Regimes: High={regime_counts['High']}, Mid={regime_counts['Mid']}, Low={regime_counts['Low']}, Unknown={regime_counts['Unknown']}."
+        ),
+        guard_language(
+            f"Trends: Down={trend_counts['Down']}, Flat={trend_counts['Flat']}, Up={trend_counts['Up']}, Unknown={trend_counts['Unknown']}."
+        ),
+        guard_language(
+            f"Tensions: {tension_panels} panels show mixed signals (top: {top_tension_text})."
+        ),
+        guard_language(
+            "Notes: Interpretation is descriptive and based on current computed metrics."
         ),
     ]
 

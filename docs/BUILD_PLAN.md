@@ -122,7 +122,7 @@ Reusable compute module in backend/lib/.
 ---
 
 ## Milestone 5 — Interpretation Engine v1
-Status: ⏳ In Progress
+Status: ✅ COMPLETE
 
 Goal:
 - Template-driven panel text generation
@@ -134,11 +134,15 @@ Goal:
 Deliverable:
 Panel + tab summary generated from states.
 
-Next:
-- Template-driven generation
-- Language guardrails
-- Conflict detection
-- Summary synthesis
+- [x] `backend/lib/interpret.py` with `guard_language` + banned phrase list
+- [x] Template-driven interpretation generation for all panels (intraday + swing)
+- [x] Deterministic conflict/tension detection rules (adds `Tension:` line when applicable)
+- [x] Tab-level summary synthesis: Overview / Regimes / Trends / Tensions / Notes with deterministic tie-breaks and banned-phrase compliance
+- [x] Extended tests:
+  - interpretation guardrail tests
+  - tension detection tests
+  - API payload tests validating summary structure + counts + banned-phrase scan
+- [x] Test status: `pytest -q` (24 passed)
 
 ---
 
@@ -215,10 +219,10 @@ Publicly accessible MEI dashboard.
 # 4. Current Status
 
 Current Milestone:
-Milestone 5 — Interpretation Engine v1
+Milestone 6 — SQLite Persistence
 
 Backend:
-Compute utility layer complete and integrated into deterministic stub payload generation.
+Compute + interpretation layers are complete with deterministic summaries and guardrail-validated text generation.
 
 Frontend:
 Dashboard UI scaffold complete with Intraday/Swing tabs, panel layouts, PanelCard sections, and shared sensitivity/summary rendering via proxy-backed API routes.
@@ -249,4 +253,4 @@ Dashboard UI scaffold complete with Intraday/Swing tabs, panel layouts, PanelCar
 
 # 7. Next Immediate Action
 
-Begin Milestone 5: implement template-driven interpretation generation + language guardrails (no prediction words) for one Intraday panel.
+Begin Milestone 6: implement SQLite snapshot storage with a minimal schema and write/read path for the latest tab payload.
