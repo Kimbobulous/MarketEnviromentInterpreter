@@ -201,7 +201,7 @@ Live data powering Intraday tab.
 ---
 
 ## Milestone 8 — Swing Panel Expansion
-Status: ⏳ Pending
+Status: ✅ COMPLETE
 
 Goal:
 - Breadth metrics
@@ -211,6 +211,18 @@ Goal:
 
 Deliverable:
 Complete Swing tab panels.
+
+- [x] Swing tab now computed with proxy panels:
+  - Breadth Participation (RSP/SPY)
+  - Concentration Tilt (QQQ/SPY)
+  - Risk Sentiment (HYG/SHY)
+  - Volatility Term Structure Proxy (VXX/VIX proxy)
+- [x] Uses Massive/Polygon daily bars via adapter + SQLite cache
+- [x] Interpretation engine applied to Swing panels with guardrails
+- [x] Summary includes Swing proxy coverage line
+- [x] Swing endpoint supports last-good snapshot fallback on provider failure (tested)
+- [x] Tests/fixtures added for new tickers
+- [x] Test status: `pytest -q` (52 passed)
 
 ---
 
@@ -245,9 +257,9 @@ Publicly accessible MEI dashboard.
 # 4. Current Status
 
 Current Milestone:
-Milestone 8 — Swing Panel Expansion
+Milestone 9 — Summary Weighting Engine
 
-Intraday is real-data powered; Swing still stubbed.
+Intraday and Swing are both powered by computed proxy-driven panels with persistence and fallback behavior.
 
 Frontend:
 Dashboard UI scaffold complete with Intraday/Swing tabs, panel layouts, PanelCard sections, and shared sensitivity/summary rendering via proxy-backed API routes.
@@ -278,4 +290,4 @@ Dashboard UI scaffold complete with Intraday/Swing tabs, panel layouts, PanelCar
 
 # 7. Next Immediate Action
 
-Start Milestone 8 Task 1: define Swing panel specs (breadth, concentration, sentiment, vol term structure) using placeholder adapters initially, keeping schema stable.
+Begin Milestone 9 Task 1: implement force weighting + dominant factor detection feeding a structured 3–4 sentence summary.

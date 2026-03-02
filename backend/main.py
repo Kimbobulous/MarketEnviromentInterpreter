@@ -1,5 +1,6 @@
 from datetime import datetime, timezone
 from contextlib import asynccontextmanager
+import math
 import os
 
 from fastapi import FastAPI
@@ -17,6 +18,7 @@ from backend.lib.interpret import (
 )
 from backend.lib.market_data.cache import get_cache_entry
 from backend.lib.market_data.client import (
+    get_daily_ohlc,
     get_spy_daily,
     get_vix_daily,
     get_yield_daily,
@@ -233,21 +235,13 @@ def _aggregate_tab_signals(panels: list[dict]) -> dict:
     }
 
 
-def build_payload(tab_name: str, panel_specs: list[dict]) -> dict:
+def _build_payload_from_panels(tab_name: str, panels: list[dict]) -> dict:
     timestamp = _iso_now()
-    panels = [
-        build_panel(
-            panel_id=spec["id"],
-            title=spec["title"],
-            series=spec["series"],
-            lookback=spec["lookback"],
-            tab_name=tab_name,
-        )
-        for spec in panel_specs
-    ]
     status_counts = {"ok": 0, "partial": 0, "error": 0}
     for p in panels:
-        status_counts[p["status"]] += 1
+        panel_status_value = p.get("status", "")
+        if panel_status_value in status_counts:
+            status_counts[panel_status_value] += 1
 
     panel_count = len(panels)
     aggregates = _aggregate_tab_signals(panels)
@@ -288,6 +282,12 @@ def build_payload(tab_name: str, panel_specs: list[dict]) -> dict:
             "Notes: Interpretation is descriptive and based on current computed metrics."
         ),
     ]
+    if tab_name == "swing":
+        summary.append(
+            guard_language(
+                "Coverage: Swing proxies cover breadth (RSP/SPY), concentration (QQQ/SPY), credit risk appetite (HYG/SHY), and volatility conditions."
+            )
+        )
 
     return {
         "tab": tab_name,
@@ -296,6 +296,20 @@ def build_payload(tab_name: str, panel_specs: list[dict]) -> dict:
         "conditional_sensitivity": conditional_sensitivity,
         "summary": summary,
     }
+
+
+def build_payload(tab_name: str, panel_specs: list[dict]) -> dict:
+    panels = [
+        build_panel(
+            panel_id=spec["id"],
+            title=spec["title"],
+            series=spec["series"],
+            lookback=spec["lookback"],
+            tab_name=tab_name,
+        )
+        for spec in panel_specs
+    ]
+    return _build_payload_from_panels(tab_name, panels)
 
 
 # Backward-compatible wrapper for existing tests that call _build_panel directly.
@@ -445,6 +459,203 @@ def _build_intraday_panel_specs(conn) -> list[dict]:
     ]
 
 
+def _env_int(name: str, default: int, minimum: int = 1) -> int:
+    raw = os.getenv(name, str(default))
+    try:
+        parsed = int(raw)
+    except (TypeError, ValueError):
+        return default
+    return max(minimum, parsed)
+
+
+def _rows_to_close_map(rows: list[dict]) -> dict[str, float]:
+    out: dict[str, float] = {}
+    for row in rows:
+        if not isinstance(row, dict):
+            continue
+        row_date = row.get("date")
+        close = row.get("close")
+        if isinstance(row_date, str) and isinstance(close, (int, float)) and close > 0:
+            out[row_date] = float(close)
+    return out
+
+
+def _build_log_ratio_series(rows_a: list[dict], rows_b: list[dict]) -> list[float]:
+    a_by_date = _rows_to_close_map(rows_a)
+    b_by_date = _rows_to_close_map(rows_b)
+    common_dates = sorted(set(a_by_date.keys()) & set(b_by_date.keys()))
+    series: list[float] = []
+    for row_date in common_dates:
+        a_close = a_by_date.get(row_date)
+        b_close = b_by_date.get(row_date)
+        if not isinstance(a_close, float) or not isinstance(b_close, float):
+            continue
+        if a_close <= 0 or b_close <= 0:
+            continue
+        series.append(math.log(a_close / b_close))
+    return series
+
+
+def _safe_daily_rows(conn, ticker: str) -> tuple[list[dict], str | None]:
+    try:
+        return get_daily_ohlc(conn, symbol=ticker), None
+    except RuntimeError:
+        return [], f"{ticker} series unavailable."
+
+
+def _build_swing_proxy_panel(
+    panel_id: str,
+    title: str,
+    source_tickers: str,
+    series: list[float],
+    trend_lookback: int,
+    pctl_lookback: int,
+    data_note: str | None = None,
+) -> dict:
+    timestamp = _iso_now()
+    status = "ok"
+    latest = None
+    percentile = None
+    regime = None
+    slope = None
+    trend_direction = None
+    had_error = False
+
+    if not series:
+        status = "partial"
+    else:
+        try:
+            latest = round(series[-1], 6)
+            percentile = round(rolling_percentile(series, lookback=pctl_lookback), 2)
+            regime = classify_regime(percentile)
+        except ValueError:
+            status = "partial"
+        except Exception:
+            had_error = True
+
+        try:
+            trend_window = series[-trend_lookback:] if len(series) > trend_lookback else series
+            trend_input = [math.exp(value) for value in trend_window]
+            slope = round(trend_slope(trend_input), 4)
+            trend_direction = "Up" if slope > 0 else "Down" if slope < 0 else "Flat"
+        except ValueError:
+            status = "partial"
+        except Exception:
+            had_error = True
+
+    if had_error:
+        status = "error"
+
+    if status == "partial":
+        latest = None
+        percentile = None
+        regime = None
+        slope = None
+        trend_direction = None
+
+    raw_metrics = [
+        {"key": "latest", "value": latest, "unit": ""},
+        {"key": "percentile_lookback", "value": percentile, "unit": ""},
+        {"key": "regime", "value": regime, "unit": ""},
+        {"key": "trend_slope", "value": slope, "unit": ""},
+        {"key": "trend_direction", "value": trend_direction, "unit": ""},
+        {"key": "source_tickers", "value": source_tickers, "unit": ""},
+    ]
+
+    panel = {
+        "id": panel_id,
+        "title": title,
+        "raw_metrics": raw_metrics,
+        "context": [],
+        "interpretation": [],
+        "why_toggle": "",
+        "status": status,
+        "last_updated": timestamp,
+    }
+
+    generated = generate_interpretation("swing", panel)
+    panel["context"] = generated["context"]
+    panel["interpretation"] = generated["interpretation"]
+    panel["why_toggle"] = generated["why_toggle"]
+
+    if status == "partial" and isinstance(data_note, str) and data_note:
+        panel["interpretation"].append(guard_language(f"Data note: {data_note}"))
+
+    return panel
+
+
+def _build_swing_panels(conn) -> list[dict]:
+    breadth_a = os.getenv("MEI_SWING_BREADTH_A", "RSP")
+    breadth_b = os.getenv("MEI_SWING_BREADTH_B", "SPY")
+    conc_a = os.getenv("MEI_SWING_CONC_A", "QQQ")
+    conc_b = os.getenv("MEI_SWING_CONC_B", "SPY")
+    sent_a = os.getenv("MEI_SWING_SENT_A", "HYG")
+    sent_b = os.getenv("MEI_SWING_SENT_B", "SHY")
+    swing_vix = os.getenv("MEI_SWING_VIX_TICKER", "I:VIX")
+    swing_vol_etf = os.getenv("MEI_SWING_VOL_ETF", "VXX")
+    trend_lookback = _env_int("MEI_SWING_LOOKBACK", default=60, minimum=2)
+    pctl_lookback = _env_int("MEI_SWING_PCTL_LOOKBACK", default=20, minimum=2)
+
+    breadth_a_rows, breadth_a_note = _safe_daily_rows(conn, breadth_a)
+    breadth_b_rows, breadth_b_note = _safe_daily_rows(conn, breadth_b)
+    conc_a_rows, conc_a_note = _safe_daily_rows(conn, conc_a)
+    conc_b_rows, conc_b_note = _safe_daily_rows(conn, conc_b)
+    sent_a_rows, sent_a_note = _safe_daily_rows(conn, sent_a)
+    sent_b_rows, sent_b_note = _safe_daily_rows(conn, sent_b)
+    vix_rows, vix_note = _safe_daily_rows(conn, swing_vix)
+    vol_rows, vol_note = _safe_daily_rows(conn, swing_vol_etf)
+
+    breadth_note = " ".join([note for note in [breadth_a_note, breadth_b_note] if note]) or None
+    conc_note = " ".join([note for note in [conc_a_note, conc_b_note] if note]) or None
+    sent_note = " ".join([note for note in [sent_a_note, sent_b_note] if note]) or None
+    vol_combined_note = " ".join([note for note in [vix_note, vol_note] if note]) or None
+
+    panels = [
+        _build_swing_proxy_panel(
+            panel_id="swing_breadth_participation",
+            title="Swing Breadth Participation",
+            source_tickers=f"{breadth_a}/{breadth_b}",
+            series=_build_log_ratio_series(breadth_a_rows, breadth_b_rows),
+            trend_lookback=trend_lookback,
+            pctl_lookback=pctl_lookback,
+            data_note=breadth_note,
+        ),
+        _build_swing_proxy_panel(
+            panel_id="swing_concentration_tilt",
+            title="Swing Concentration Tilt",
+            source_tickers=f"{conc_a}/{conc_b}",
+            series=_build_log_ratio_series(conc_a_rows, conc_b_rows),
+            trend_lookback=trend_lookback,
+            pctl_lookback=pctl_lookback,
+            data_note=conc_note,
+        ),
+        _build_swing_proxy_panel(
+            panel_id="swing_risk_sentiment",
+            title="Swing Risk Sentiment",
+            source_tickers=f"{sent_a}/{sent_b}",
+            series=_build_log_ratio_series(sent_a_rows, sent_b_rows),
+            trend_lookback=trend_lookback,
+            pctl_lookback=pctl_lookback,
+            data_note=sent_note,
+        ),
+        _build_swing_proxy_panel(
+            panel_id="swing_vol_term_structure",
+            title="Swing Volatility Term Structure Proxy",
+            source_tickers=f"{swing_vol_etf}/{swing_vix}",
+            series=_build_log_ratio_series(vol_rows, vix_rows),
+            trend_lookback=trend_lookback,
+            pctl_lookback=pctl_lookback,
+            data_note=vol_combined_note,
+        ),
+    ]
+    return panels
+
+
+def _build_swing_payload(conn) -> dict:
+    panels = _build_swing_panels(conn)
+    return _build_payload_from_panels("swing", panels)
+
+
 @app.get("/api/intraday")
 def get_intraday():
     return _build_with_persistence(tab="intraday", panel_specs_builder=_build_intraday_panel_specs)
@@ -452,43 +663,14 @@ def get_intraday():
 
 @app.get("/api/swing")
 def get_swing():
-    panel_specs = [
-        {
-            "id": "swing_vol_state",
-            "title": "Swing Volatility State",
-            "series": [
-                1.30,
-                1.29,
-                1.28,
-                1.27,
-                1.26,
-                1.25,
-                1.24,
-                1.23,
-                1.22,
-                1.21,
-                1.20,
-                1.19,
-                1.18,
-                1.17,
-                1.16,
-                1.15,
-                1.14,
-                1.13,
-                1.12,
-                1.11,
-                1.10,
-            ],
-            "lookback": 20,
-        }
-    ]
-    return _build_with_persistence(tab="swing", panel_specs=panel_specs)
+    return _build_with_persistence(tab="swing", payload_builder=_build_swing_payload)
 
 
 def _build_with_persistence(
     tab: str,
     panel_specs: list[dict] | None = None,
     panel_specs_builder=None,
+    payload_builder=None,
 ) -> dict:
     forced_fail_tab = os.getenv("MEI_FORCE_FAIL_TAB", "").strip().lower()
     try:
@@ -498,11 +680,13 @@ def _build_with_persistence(
         conn = connect()
         try:
             init_db(conn)
-            specs = panel_specs if panel_specs is not None else []
-            if panel_specs_builder is not None:
-                specs = panel_specs_builder(conn)
-
-            payload = build_payload(tab, specs)
+            if payload_builder is not None:
+                payload = payload_builder(conn)
+            else:
+                specs = panel_specs if panel_specs is not None else []
+                if panel_specs_builder is not None:
+                    specs = panel_specs_builder(conn)
+                payload = build_payload(tab, specs)
             save_snapshot(conn, tab=tab, payload=payload)
         finally:
             conn.close()

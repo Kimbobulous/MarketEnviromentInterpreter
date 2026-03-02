@@ -11,28 +11,37 @@ from backend.lib.market_data.fred_provider import FredProvider
 from backend.lib.market_data.polygon_provider import PolygonProvider
 
 
-def get_spy_daily(
+def get_daily_ohlc(
     conn: sqlite3.Connection,
+    symbol: str,
     start: str | None = None,
     end: str | None = None,
 ) -> list[dict]:
-    ticker = os.getenv("MEI_SPY_TICKER", "SPY")
-    provider_name = "polygon"
+    """Return cached/fresh Polygon daily OHLC rows for any ticker."""
     provider = PolygonProvider(api_key=os.getenv("MEI_POLYGON_API_KEY", ""))
     start_date, end_date = _resolve_date_range(start=start, end=end)
-    key = f"{provider_name}:ohlc:{ticker}:{start_date}:{end_date}"
+    key = daily_ohlc_cache_key(symbol=symbol, start=start_date, end=end_date)
     max_age_seconds = _cache_max_age_seconds()
 
     cached = cache_get(conn, key=key, max_age_seconds=max_age_seconds)
     if cached is not None:
         return cached
 
-    rows = provider.get_daily_ohlc(ticker, start=start_date, end=end_date)
+    rows = provider.get_daily_ohlc(symbol, start=start_date, end=end_date)
     if not rows:
-        raise RuntimeError("No SPY rows returned from provider")
+        raise RuntimeError(f"No rows returned from provider for {symbol}")
 
     cache_put(conn, key=key, rows=rows)
     return rows
+
+
+def get_spy_daily(
+    conn: sqlite3.Connection,
+    start: str | None = None,
+    end: str | None = None,
+) -> list[dict]:
+    ticker = os.getenv("MEI_SPY_TICKER", "SPY")
+    return get_daily_ohlc(conn, symbol=ticker, start=start, end=end)
 
 
 def get_vix_daily(
@@ -41,22 +50,7 @@ def get_vix_daily(
     end: str | None = None,
 ) -> list[dict]:
     ticker = os.getenv("MEI_VIX_TICKER", "I:VIX")
-    provider_name = "polygon"
-    provider = PolygonProvider(api_key=os.getenv("MEI_POLYGON_API_KEY", ""))
-    start_date, end_date = _resolve_date_range(start=start, end=end)
-    key = f"{provider_name}:ohlc:{ticker}:{start_date}:{end_date}"
-    max_age_seconds = _cache_max_age_seconds()
-
-    cached = cache_get(conn, key=key, max_age_seconds=max_age_seconds)
-    if cached is not None:
-        return cached
-
-    rows = provider.get_daily_ohlc(ticker, start=start_date, end=end_date)
-    if not rows:
-        raise RuntimeError("No VIX rows returned from provider")
-
-    cache_put(conn, key=key, rows=rows)
-    return rows
+    return get_daily_ohlc(conn, symbol=ticker, start=start, end=end)
 
 
 def get_yield_daily(
@@ -85,14 +79,18 @@ def get_yield_daily(
 
 def spy_cache_key(start: str | None = None, end: str | None = None) -> str:
     ticker = os.getenv("MEI_SPY_TICKER", "SPY")
-    start_date, end_date = _resolve_date_range(start=start, end=end)
-    return f"polygon:ohlc:{ticker}:{start_date}:{end_date}"
+    return daily_ohlc_cache_key(symbol=ticker, start=start, end=end)
 
 
 def vix_cache_key(start: str | None = None, end: str | None = None) -> str:
     ticker = os.getenv("MEI_VIX_TICKER", "I:VIX")
+    return daily_ohlc_cache_key(symbol=ticker, start=start, end=end)
+
+
+def daily_ohlc_cache_key(symbol: str, start: str | None = None, end: str | None = None) -> str:
+    """Return cache key for Polygon daily OHLC."""
     start_date, end_date = _resolve_date_range(start=start, end=end)
-    return f"polygon:ohlc:{ticker}:{start_date}:{end_date}"
+    return f"polygon:ohlc:{symbol}:{start_date}:{end_date}"
 
 
 def yield_cache_key(start: str | None = None, end: str | None = None) -> str:

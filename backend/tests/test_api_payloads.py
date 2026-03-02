@@ -133,6 +133,12 @@ def test_summary_structure_counts_and_guardrails_for_both_endpoints():
         assert overview
         assert regimes
         assert trends
+        if payload["tab"] == "swing":
+            coverage = next(
+                (line for line in payload["summary"] if line.startswith("Coverage:")),
+                "",
+            )
+            assert coverage
 
         for line in payload["summary"]:
             _assert_no_banned_phrases(line)
