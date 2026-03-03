@@ -18,6 +18,13 @@ If this is the first time after cloning (or after pulling new deps):
     npm install
     npm run dev:all
 
+That starts:
+
+Backend → http://127.0.0.1:8000
+
+Frontend → http://localhost:3000
+
+Ctrl + C stops both.
 ## Starting the Backend
 
 From repo root:
