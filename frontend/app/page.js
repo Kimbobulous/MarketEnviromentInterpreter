@@ -57,40 +57,6 @@ function formatPercent(value, digits = 2) {
   return `${value.toFixed(digits)}%`;
 }
 
-function extractLead(lines) {
-  if (!Array.isArray(lines)) {
-    return null;
-  }
-  const leadLine = lines.find((line) => typeof line === "string" && line.startsWith("Lead:"));
-  if (!leadLine) {
-    return null;
-  }
-  const match = leadLine.match(/^Lead:\s*([a-z][a-z\s-]*)\s+is\s+/i);
-  return match && match[1] ? match[1].trim() : null;
-}
-
-function extractStrength(lines) {
-  const full = Array.isArray(lines) ? lines.join(" ") : "";
-  const match = full.match(/\((strong|moderate|mixed)\)/i);
-  return match ? match[1].toLowerCase() : "mixed";
-}
-
-function hasMixedSignals(lines, strengthValue, diagnosticsLine) {
-  if (strengthValue === "mixed") {
-    return true;
-  }
-  const text = Array.isArray(lines) ? lines.join(" ").toLowerCase() : "";
-  if (text.includes("mixed signals") || text.includes("shared across multiple")) {
-    return true;
-  }
-  const match = String(diagnosticsLine || "").match(/Tensions=(\d+)/i);
-  if (!match) {
-    return false;
-  }
-  const tensions = Number(match[1]);
-  return Number.isFinite(tensions) && tensions > 0;
-}
-
 function helpKeyForPanel(panel) {
   const id = String(panel?.id || "").toLowerCase();
   const title = String(panel?.title || "").toLowerCase();
@@ -138,11 +104,54 @@ function panelPresentation(panel, tab) {
   };
 }
 
-function HelpLabel({ label, helpKey }) {
+function classifyTrendStrength(slopeValue, latestValue) {
+  if (
+    typeof slopeValue !== "number" ||
+    !Number.isFinite(slopeValue) ||
+    typeof latestValue !== "number" ||
+    !Number.isFinite(latestValue)
+  ) {
+    return { label: "N/A", pctSlope: null };
+  }
+
+  const pctSlope = (Math.abs(slopeValue) / Math.max(1e-9, Math.abs(latestValue))) * 100;
+  if (pctSlope < 0.01) {
+    return { label: "Flat", pctSlope };
+  }
+  if (pctSlope < 0.05) {
+    return { label: "Weak", pctSlope };
+  }
+  if (pctSlope < 0.15) {
+    return { label: "Moderate", pctSlope };
+  }
+  return { label: "Strong", pctSlope };
+}
+
+function trendStrengthTooltip(slopeValue, latestValue, trendLookback) {
+  const strengthHelp = getHelpText("trend_strength");
+  const slopeHelp = getHelpText("trend_slope");
+  const slopeText =
+    typeof slopeValue === "number" && Number.isFinite(slopeValue) ? slopeValue.toFixed(6) : "N/A";
+  const { pctSlope } = classifyTrendStrength(slopeValue, latestValue);
+  const pctSlopeText = typeof pctSlope === "number" && Number.isFinite(pctSlope) ? `${pctSlope.toFixed(4)}%` : "N/A";
+  const lookbackText =
+    typeof trendLookback === "number" && Number.isFinite(trendLookback) ? String(trendLookback) : "N/A";
+  return [
+    strengthHelp,
+    "Buckets: Flat < 0.01%, Weak 0.01% to < 0.05%, Moderate 0.05% to < 0.15%, Strong >= 0.15% (|slope| as % of latest value).",
+    slopeHelp,
+    `Raw slope: ${slopeText}`,
+    `Normalized slope: ${pctSlopeText}`,
+    `Trend lookback: ${lookbackText}`,
+  ].join("\n");
+}
+
+function HelpLabel({ label, helpKey, helpText }) {
+  const tooltipText = typeof helpText === "string" && helpText.trim() ? helpText : getHelpText(helpKey);
   return (
     <span style={{ display: "inline-flex", alignItems: "center" }}>
       {label}
-      <InfoPill text={getHelpText(helpKey)} label={`${label} help`} />
+      <InfoPill text={tooltipText} label={`${label} help`} />
     </span>
   );
 }
@@ -241,10 +250,16 @@ export default function HomePage() {
   const panels = payload && Array.isArray(payload.panels) ? payload.panels : [];
   const displayPanels = panels.map((panel) => {
     const presentation = panelPresentation(panel, activeTab);
+    const rawMetrics = Array.isArray(panel?.raw_metrics) ? panel.raw_metrics : [];
+    const trendMetric = rawMetrics.find((metric) => String(metric?.key || "") === "trend_slope");
+    const rawTrendSlope =
+      typeof trendMetric?.value === "number" && Number.isFinite(trendMetric.value) ? trendMetric.value : null;
     return {
       ...panel,
+      raw_metrics: rawMetrics.filter((metric) => String(metric?.key || "") !== "trend_slope"),
       title: presentation.title,
       _presentation: presentation,
+      _rawTrendSlope: rawTrendSlope,
     };
   });
 
@@ -281,11 +296,9 @@ export default function HomePage() {
       ? focusedMetrics.percentile_lookback
       : null;
   const focusedTrendSlope =
-    typeof focusedMetrics.trend_slope === "number" && Number.isFinite(focusedMetrics.trend_slope)
-      ? focusedMetrics.trend_slope
-      : typeof focusedMetrics.slope === "number" && Number.isFinite(focusedMetrics.slope)
-        ? focusedMetrics.slope
-        : null;
+    typeof focusedPanel?._rawTrendSlope === "number" && Number.isFinite(focusedPanel._rawTrendSlope)
+      ? focusedPanel._rawTrendSlope
+      : null;
   const focusedFirst = focusedValues.length > 0 ? focusedValues[0] : null;
   const focusedLatest = focusedValues.length > 0 ? focusedValues[focusedValues.length - 1] : null;
   const focusedWindowLow = focusedValues.length > 0 ? Math.min(...focusedValues) : null;
@@ -301,6 +314,20 @@ export default function HomePage() {
   const focusedPanelTitle = focusedPanel?._presentation?.title || String(focusedPanel?.title || "Panel");
   const focusedPanelMicrocopy =
     focusedPanel?._presentation?.microcopy || "Detailed view of the selected series over the active lookback window.";
+  const focusedTrendLookback =
+    typeof focusedPanel?.window_meta?.trend_lookback === "number" && Number.isFinite(focusedPanel.window_meta.trend_lookback)
+      ? focusedPanel.window_meta.trend_lookback
+      : null;
+  const focusedTrendStrength = classifyTrendStrength(focusedTrendSlope, focusedLatest);
+  const focusedTrendStrengthTooltip = trendStrengthTooltip(focusedTrendSlope, focusedLatest, focusedTrendLookback);
+  const focusedStatus = String(focusedPanel?.status || "unknown").toLowerCase();
+  const focusedIsPartial = focusedStatus === "partial";
+  const focusedBadgeClass =
+    focusedStatus === "ok"
+      ? "badge badge-ok"
+      : focusedStatus === "partial"
+        ? "badge badge-partial"
+        : "badge badge-error";
   const keyStatsRows = [
     { label: "Latest", helpKey: "latest", value: formatNumber(focusedLatest, 4) },
     { label: "Window Low", helpKey: "window_low", value: formatNumber(focusedWindowLow, 4) },
@@ -319,12 +346,10 @@ export default function HomePage() {
     { label: "Regime", helpKey: "regime", value: String(focusedRegime || "N/A") },
     { label: "Trend", helpKey: "trend", value: String(focusedTrend || "N/A") },
     {
-      label: "Trend slope",
-      helpKey: "trend_slope",
-      value:
-        typeof focusedTrendSlope === "number" && Number.isFinite(focusedTrendSlope)
-          ? focusedTrendSlope.toFixed(6)
-          : "N/A",
+      label: "Trend strength",
+      helpKey: "trend_strength",
+      helpText: focusedTrendStrengthTooltip,
+      value: focusedTrendStrength.label,
     },
   ];
   if (focusedIsSpyPanel) {
@@ -334,11 +359,6 @@ export default function HomePage() {
       value: `${focusedRegime} / ${focusedTrend}`,
     });
   }
-  const diagnosticsLine =
-    summary.find((line) => typeof line === "string" && line.startsWith("Diagnostics:")) || "";
-  const dominantForce = extractLead(summary) || "Unavailable";
-  const strength = extractStrength(summary);
-  const mixedSignals = hasMixedSignals(summary, strength, diagnosticsLine);
 
   const selectFocusedPanel = (panelId) => {
     setFocusedByTab((prev) => ({
@@ -432,7 +452,7 @@ export default function HomePage() {
           {!loading && !error && (
             <div key={activeTab} className="tab-switch-fade">
               {focusedPanel && (
-                <section className="focused-chart surface">
+                <section className={`focused-chart surface ${focusedIsPartial ? "is-partial" : ""}`}>
                   <div className="focused-chart-head">
                     <div>
                       <h2 style={{ display: "inline-flex", alignItems: "center" }}>
@@ -451,42 +471,52 @@ export default function HomePage() {
                           <HelpLabel label="Trend" helpKey="trend" />: {focusedTrend}
                         </span>
                         <span>
-                          <HelpLabel label="Trend slope" helpKey="trend_slope" />:{" "}
-                          {typeof focusedTrendSlope === "number" ? focusedTrendSlope.toFixed(6) : "N/A"}
+                          <HelpLabel label="Trend strength" helpKey="trend_strength" helpText={focusedTrendStrengthTooltip} />:{" "}
+                          {focusedTrendStrength.label}
                         </span>
                       </p>
                     </div>
-                    {focusedHoverReadout && (
-                      <div
-                        style={{
-                          border: "1px solid #355173",
-                          borderRadius: 10,
-                          background: "rgba(9, 16, 27, 0.95)",
-                          color: "#deebfc",
-                          padding: "0.38rem 0.55rem",
-                          fontSize: "0.73rem",
-                          lineHeight: 1.35,
-                          minWidth: 170,
-                          textAlign: "right",
-                        }}
-                        aria-live="polite"
-                      >
-                        <div>{focusedHoverReadout.dateLabel}</div>
-                        <div>Value: {focusedHoverReadout.valueLabel}</div>
-                        {focusedHoverReadout.deltaText && <div>Δ: {focusedHoverReadout.deltaText}</div>}
-                      </div>
-                    )}
+                    <div style={{ display: "flex", flexDirection: "column", alignItems: "flex-end", gap: "0.35rem" }}>
+                      <span className={focusedBadgeClass}>{focusedStatus}</span>
+                      {focusedIsPartial && (
+                        <p className="muted" style={{ fontSize: "0.76rem", textAlign: "right", maxWidth: 220 }}>
+                          Insufficient history for this lookback.
+                        </p>
+                      )}
+                      {focusedHoverReadout && (
+                        <div
+                          style={{
+                            border: "1px solid #355173",
+                            borderRadius: 10,
+                            background: "rgba(9, 16, 27, 0.95)",
+                            color: "#deebfc",
+                            padding: "0.38rem 0.55rem",
+                            fontSize: "0.73rem",
+                            lineHeight: 1.35,
+                            minWidth: 170,
+                            textAlign: "right",
+                          }}
+                          aria-live="polite"
+                        >
+                          <div>{focusedHoverReadout.dateLabel}</div>
+                          <div>Value: {focusedHoverReadout.valueLabel}</div>
+                          {focusedHoverReadout.deltaText && <div>Δ: {focusedHoverReadout.deltaText}</div>}
+                        </div>
+                      )}
+                    </div>
                   </div>
-                  <SeriesChartTV
-                    data={focusedPanel.sparkline}
-                    timeLabels={focusedPanel.sparkline_times}
-                    height={320}
-                    regime={focusedRegime}
-                    trend={focusedTrend}
-                    percentile={focusedPercentile}
-                    showFloatingTooltip={false}
-                    onHoverChange={handleFocusedHover}
-                  />
+                  <div className={`focused-chart-body ${focusedIsPartial ? "is-dimmed" : ""}`}>
+                    <SeriesChartTV
+                      data={focusedPanel.sparkline}
+                      timeLabels={focusedPanel.sparkline_times}
+                      height={320}
+                      regime={focusedRegime}
+                      trend={focusedTrend}
+                      percentile={focusedPercentile}
+                      showFloatingTooltip={false}
+                      onHoverChange={handleFocusedHover}
+                    />
+                  </div>
 
                   <div className="focused-subtabs">
                     <button
@@ -513,9 +543,9 @@ export default function HomePage() {
                         <table className="key-stats-table" aria-label="Key Stats table">
                           <tbody>
                             {keyStatsRows.map((row) => (
-                              <tr key={row.label}>
+                              <tr key={row.label} className={focusedIsPartial ? "stats-row-dimmed" : ""}>
                                 <th scope="row">
-                                  <HelpLabel label={row.label} helpKey={row.helpKey} />
+                                  <HelpLabel label={row.label} helpKey={row.helpKey} helpText={row.helpText} />
                                 </th>
                                 <td>{row.value}</td>
                               </tr>
@@ -552,29 +582,31 @@ export default function HomePage() {
         </div>
 
         <aside className={`quant-right-rail surface ${railOpen ? "open" : ""}`}>
-          <section
-            style={{
-              border: "1px solid rgba(62, 91, 122, 0.6)",
-              borderRadius: 12,
-              padding: "0.55rem 0.7rem",
-              marginBottom: "0.7rem",
-              background: "rgba(7, 15, 25, 0.35)",
-            }}
-          >
-            <h3 style={{ marginBottom: "0.45rem" }}>Insight Labels</h3>
-            <p className="muted" style={{ marginBottom: "0.25rem" }}>
-              <HelpLabel label="Dominant Force" helpKey="dominant_force" />: {dominantForce}
-            </p>
-            <p className="muted" style={{ marginBottom: "0.25rem" }}>
-              <HelpLabel label="Strength" helpKey="strength" />: {strength}
-            </p>
-            <p className="muted">
-              <HelpLabel label="Mixed signals" helpKey="mixed_signals" />: {mixedSignals ? "Yes" : "No"}
-            </p>
-          </section>
           <SystemInsight summaryItems={summary} sensitivityItems={sensitivity} loading={loading} />
         </aside>
       </section>
+      <style jsx global>{`
+        .focused-chart.is-partial .focused-chart-body {
+          opacity: 0.58;
+          filter: saturate(0.7);
+        }
+        .focused-chart.is-partial .stats-row-dimmed {
+          opacity: 0.6;
+        }
+        .chart-tile:has(.badge-partial) .chart-tile-head::after {
+          content: "Insufficient history for this lookback.";
+          display: block;
+          margin-top: 0.25rem;
+          font-size: 0.73rem;
+          color: #8fa3bc;
+        }
+        .chart-tile:has(.badge-partial) .chart-tile-plot,
+        .chart-tile:has(.badge-partial) .tile-highlights,
+        .chart-tile:has(.badge-partial) .tile-percentile {
+          opacity: 0.58;
+          filter: saturate(0.72);
+        }
+      `}</style>
     </main>
   );
 }

@@ -5,8 +5,10 @@ export const HELP_TEXT = {
     "Regime is a categorical state label derived from the indicator level and context rules.\nIt is a compact description of current conditions, not a forecast.",
   trend:
     "Trend describes recent directional drift (up, down, or flat) in the computed series over the active window.\nIt is descriptive context rather than a guarantee of future movement.",
+  trend_strength:
+    "Trend strength summarizes how large the current slope is relative to the latest value in the series.\nIt provides an at-a-glance intensity label (Flat, Weak, Moderate, Strong).",
   trend_slope:
-    "Trend slope is the estimated rate of change across the trend window.\nA larger absolute slope means stronger recent directional drift in that window.",
+    "Trend slope is the estimated rate of change across the trend window.",
   lookback_window:
     "Controls how far back we compare when computing percentiles and trend. Shorter windows react faster; longer windows smooth noise.",
   dominant_force:
