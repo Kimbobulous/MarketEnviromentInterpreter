@@ -1,7 +1,7 @@
 "use client";
 
 import { CrosshairMode, LineSeries, createChart } from "lightweight-charts";
-import { useEffect, useMemo, useRef, useState } from "react";
+import { memo, useEffect, useMemo, useRef, useState } from "react";
 
 const ISO_DATE_RE = /^\d{4}-\d{2}-\d{2}$/;
 
@@ -145,7 +145,7 @@ function trendClass(trend) {
   return "flat";
 }
 
-export default function SeriesChartTV({
+function SeriesChartTV({
   data,
   timeLabels,
   height = 260,
@@ -157,14 +157,46 @@ export default function SeriesChartTV({
   onHoverChange,
 }) {
   const containerRef = useRef(null);
+  const chartRef = useRef(null);
+  const lineSeriesRef = useRef(null);
+  const resizeObserverRef = useRef(null);
+  const onHoverChangeRef = useRef(onHoverChange);
+  const showFloatingTooltipRef = useRef(showFloatingTooltip);
+  const previousByTimeRef = useRef(new Map());
+  const lastEmittedHoverRef = useRef(null);
+  const lastTooltipRef = useRef(null);
   const dataPoints = useMemo(() => normalizeSeriesData(data, timeLabels), [data, timeLabels]);
   const [tooltip, setTooltip] = useState(null);
 
+  const emitHoverIfChanged = (nextHover) => {
+    const previous = lastEmittedHoverRef.current;
+    const isSame =
+      (previous === null && nextHover === null) ||
+      (previous &&
+        nextHover &&
+        previous.dateLabel === nextHover.dateLabel &&
+        previous.valueLabel === nextHover.valueLabel &&
+        previous.deltaText === nextHover.deltaText);
+    if (isSame) {
+      return;
+    }
+
+    lastEmittedHoverRef.current = nextHover;
+    if (typeof onHoverChangeRef.current === "function") {
+      onHoverChangeRef.current(nextHover);
+    }
+  };
+
   useEffect(() => {
-    if (!containerRef.current || dataPoints.length < 1) {
-      if (typeof onHoverChange === "function") {
-        onHoverChange(null);
-      }
+    onHoverChangeRef.current = onHoverChange;
+  }, [onHoverChange]);
+
+  useEffect(() => {
+    showFloatingTooltipRef.current = showFloatingTooltip;
+  }, [showFloatingTooltip]);
+
+  useEffect(() => {
+    if (!containerRef.current) {
       return undefined;
     }
 
@@ -208,6 +240,7 @@ export default function SeriesChartTV({
         },
       },
     });
+    chartRef.current = chart;
 
     const lineOptions = {
       color,
@@ -219,23 +252,33 @@ export default function SeriesChartTV({
       typeof chart.addSeries === "function"
         ? chart.addSeries(LineSeries, lineOptions)
         : chart.addLineSeries(lineOptions);
+    lineSeriesRef.current = lineSeries;
 
-    lineSeries.setData(dataPoints);
-    if (dataPoints.length >= 2) {
-      chart.timeScale().fitContent();
-    }
-
-    const previousByTime = new Map();
-    for (let index = 1; index < dataPoints.length; index += 1) {
-      previousByTime.set(dataPoints[index].time, dataPoints[index - 1].value);
-    }
+    const setTooltipIfChanged = (nextTooltip) => {
+      if (!showFloatingTooltipRef.current) {
+        return;
+      }
+      const previous = lastTooltipRef.current;
+      const isSame =
+        (previous === null && nextTooltip === null) ||
+        (previous &&
+          nextTooltip &&
+          previous.left === nextTooltip.left &&
+          previous.top === nextTooltip.top &&
+          previous.dateLabel === nextTooltip.dateLabel &&
+          previous.valueLabel === nextTooltip.valueLabel &&
+          previous.deltaText === nextTooltip.deltaText);
+      if (isSame) {
+        return;
+      }
+      lastTooltipRef.current = nextTooltip;
+      setTooltip(nextTooltip);
+    };
 
     const handleCrosshairMove = (param) => {
       if (!containerRef.current || !param || !param.point || !param.time) {
-        setTooltip(null);
-        if (typeof onHoverChange === "function") {
-          onHoverChange(null);
-        }
+        setTooltipIfChanged(null);
+        emitHoverIfChanged(null);
         return;
       }
 
@@ -243,10 +286,8 @@ export default function SeriesChartTV({
       const width = containerRef.current.clientWidth;
       const heightPx = containerRef.current.clientHeight;
       if (x < 0 || y < 0 || x > width || y > heightPx) {
-        setTooltip(null);
-        if (typeof onHoverChange === "function") {
-          onHoverChange(null);
-        }
+        setTooltipIfChanged(null);
+        emitHoverIfChanged(null);
         return;
       }
 
@@ -258,10 +299,8 @@ export default function SeriesChartTV({
             ? pointData.close
             : null;
       if (value === null) {
-        setTooltip(null);
-        if (typeof onHoverChange === "function") {
-          onHoverChange(null);
-        }
+        setTooltipIfChanged(null);
+        emitHoverIfChanged(null);
         return;
       }
 
@@ -269,7 +308,7 @@ export default function SeriesChartTV({
         typeof param.time === "number" && Number.isFinite(param.time)
           ? Math.floor(param.time)
           : null;
-      const previousValue = epochTime !== null ? previousByTime.get(epochTime) : undefined;
+      const previousValue = epochTime !== null ? previousByTimeRef.current.get(epochTime) : undefined;
       const deltaText =
         typeof previousValue === "number" && Number.isFinite(previousValue)
           ? `${value >= previousValue ? "+" : ""}${(value - previousValue).toFixed(4)}`
@@ -287,14 +326,12 @@ export default function SeriesChartTV({
         valueLabel: formatValue(value),
         deltaText,
       };
-      setTooltip(nextHover);
-      if (typeof onHoverChange === "function") {
-        onHoverChange({
-          dateLabel: nextHover.dateLabel,
-          valueLabel: nextHover.valueLabel,
-          deltaText: nextHover.deltaText,
-        });
-      }
+      setTooltipIfChanged(nextHover);
+      emitHoverIfChanged({
+        dateLabel: nextHover.dateLabel,
+        valueLabel: nextHover.valueLabel,
+        deltaText: nextHover.deltaText,
+      });
     };
     chart.subscribeCrosshairMove(handleCrosshairMove);
 
@@ -305,17 +342,66 @@ export default function SeriesChartTV({
       chart.applyOptions({ width: containerRef.current.clientWidth });
     });
     observer.observe(containerRef.current);
+    resizeObserverRef.current = observer;
 
     return () => {
       chart.unsubscribeCrosshairMove(handleCrosshairMove);
       setTooltip(null);
-      if (typeof onHoverChange === "function") {
-        onHoverChange(null);
-      }
-      observer.disconnect();
+      emitHoverIfChanged(null);
+      lastTooltipRef.current = null;
+      lastEmittedHoverRef.current = null;
+      resizeObserverRef.current?.disconnect();
+      resizeObserverRef.current = null;
+      lineSeriesRef.current = null;
+      chartRef.current = null;
       chart.remove();
     };
-  }, [color, dataPoints, height, onHoverChange]);
+  }, []);
+
+  useEffect(() => {
+    if (!chartRef.current || !lineSeriesRef.current) {
+      return;
+    }
+    chartRef.current.applyOptions({ height });
+  }, [height]);
+
+  useEffect(() => {
+    if (!lineSeriesRef.current) {
+      return;
+    }
+    lineSeriesRef.current.applyOptions({ color });
+  }, [color]);
+
+  useEffect(() => {
+    if (!lineSeriesRef.current || !chartRef.current) {
+      return;
+    }
+
+    lineSeriesRef.current.setData(dataPoints);
+    if (dataPoints.length >= 2) {
+      chartRef.current.timeScale().fitContent();
+    }
+
+    const nextPreviousByTime = new Map();
+    for (let index = 1; index < dataPoints.length; index += 1) {
+      nextPreviousByTime.set(dataPoints[index].time, dataPoints[index - 1].value);
+    }
+    previousByTimeRef.current = nextPreviousByTime;
+
+    if (dataPoints.length < 1) {
+      lastTooltipRef.current = null;
+      setTooltip(null);
+      emitHoverIfChanged(null);
+    }
+  }, [dataPoints]);
+
+  useEffect(() => {
+    if (showFloatingTooltip) {
+      return;
+    }
+    lastTooltipRef.current = null;
+    setTooltip(null);
+  }, [showFloatingTooltip]);
 
   if (dataPoints.length < 1) {
     return <div className="chart-empty chart-large-empty">No chart data</div>;
@@ -373,3 +459,5 @@ export default function SeriesChartTV({
     </div>
   );
 }
+
+export default memo(SeriesChartTV);
