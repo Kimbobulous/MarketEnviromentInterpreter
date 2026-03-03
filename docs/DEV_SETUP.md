@@ -7,6 +7,16 @@
 - Frontend: Next.js (port 3000)
 
 ---
+## Signle start up command
+
+From repo root:
+
+    npm run dev:all
+
+If this is the first time after cloning (or after pulling new deps):
+
+    npm install
+    npm run dev:all
 
 ## Starting the Backend
 
